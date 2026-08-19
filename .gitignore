@@ -1,0 +1,22 @@
+# Build output — binaries ship as GitHub Release assets, not in the repo
+build/
+*.exe
+*.pdb
+*.dll
+
+# Local user state
+profiles.json
+settings.json
+colorpanel-log.txt
+noccd.txt
+
+# Editors / OS
+.vs/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
+
+# Internal working notes: real hardware ids, serials and debugging history
+PROJECT.md
