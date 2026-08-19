@@ -27,7 +27,7 @@ namespace ChromaPanel
         // ---- controls -------------------------------------------------
         DarkCombo _cboMon, _cboProf, _cboCh;
         Label _lblMonInfo, _lblDefault, _lblStatus, _lblHint, _lblSaved, _lblMixed;
-        DarkCheck _chkAll, _chkApplyLaunch, _chkReapply, _chkTray, _chkStartup;
+        DarkCheck _chkAll, _chkHdr, _chkApplyLaunch, _chkReapply, _chkTray, _chkStartup;
         FlatButton _btnNew, _btnRename, _btnDelete, _btnDefault, _btnReset, _btnDiag, _btnApply;
         Panel _swatch;
         CurvePreview _curve;
@@ -45,8 +45,9 @@ namespace ChromaPanel
             BuildUi();
             HookEvents();
             LoadDisplays(true);
-            RefreshProfiles(_s.LastProfile.Length > 0 ? _s.LastProfile : _s.DefaultProfile);
+            RefreshProfiles(_s.DefaultProfile);
             LoadSlidersFromState();
+            SelectProfileForCurrentMonitor();
             UpdateDefaultLabel();
 
             if (_s.ApplyOnLaunch) ApplyAll("Restored saved settings.");
@@ -98,9 +99,14 @@ namespace ChromaPanel
 
             _chkAll = new DarkCheck();
             _chkAll.Text = "Mirror every change to all displays";
-            _chkAll.SetBounds(14, 78, 340, 20);
+            _chkAll.SetBounds(14, 78, 330, 20);
             _chkAll.Checked = _s.LinkAllMonitors;
             cardD.Controls.Add(_chkAll);
+
+            _chkHdr = new DarkCheck();
+            _chkHdr.Text = "HDR";
+            _chkHdr.SetBounds(360, 78, 214, 20);
+            cardD.Controls.Add(_chkHdr);
 
             // ---------------- preset ----------------
             var cardP = NewCard("Preset", 168, 96);
@@ -337,8 +343,17 @@ namespace ChromaPanel
             {
                 if (_suspend) return;
                 LoadSlidersFromState();
+                // Follow the display: show the preset that display is on, not
+                // whatever the previous display happened to be using.
+                SelectProfileForCurrentMonitor();
                 MonitorInfo m = Current;
                 if (m != null) { _s.LastMonitorKey = m.Key; QueueSave(); }
+            };
+
+            _chkHdr.CheckedChanged += delegate
+            {
+                if (_suspend) return;
+                ToggleHdr(_chkHdr.Checked);
             };
 
             _cboCh.SelectedIndexChanged += delegate { if (!_suspend) LoadSlidersFromState(); };
@@ -350,6 +365,8 @@ namespace ChromaPanel
                 Profile p = _s.Find(name);
                 if (p == null) return;
                 _s.LastProfile = name;
+                // Remember this choice against the display(s) it was made for.
+                foreach (MonitorInfo t in Targets) _s.MonitorProfile[t.Key] = name;
                 ApplySetToTargets(p.Set);
                 LoadSlidersFromState();
                 ApplyCurrent();
@@ -423,6 +440,7 @@ namespace ChromaPanel
         {
             LoadDisplays(false);
             LoadSlidersFromState();
+            SelectProfileForCurrentMonitor();
             if (_s.ReapplyOnDisplayChange) ApplyAll("Displays changed - settings re-applied.");
             else SetStatus("Display configuration changed.", Theme.Muted);
         }
@@ -541,6 +559,53 @@ namespace ChromaPanel
             SetHint("");
         }
 
+        /// <summary>Drives the Windows HDR toggle for the selected display.</summary>
+        void ToggleHdr(bool on)
+        {
+            MonitorInfo m = Current;
+            if (m == null) return;
+            if (!m.HasTarget)
+            {
+                SetStatus("Cannot reach this display's HDR setting.", Theme.Err);
+                SyncHdrCheck();
+                return;
+            }
+
+            string err;
+            if (!Ccd.SetHdr(m.AdapterLow, m.AdapterHigh, m.TargetId, on, out err))
+            {
+                SetStatus("Could not turn HDR " + (on ? "on" : "off") + ": " + err, Theme.Err);
+                SyncHdrCheck();
+                return;
+            }
+
+            SetStatus("HDR turned " + (on ? "on" : "off") + " for " + m.BaseName + ".", Theme.Ok);
+            // Windows reconfigures the display; the resulting
+            // DisplaySettingsChanged re-enumerates and re-applies for us.
+            _displayTimer.Stop();
+            _displayTimer.Start();
+        }
+
+        /// <summary>Reflects the real HDR state without firing the handler.</summary>
+        void SyncHdrCheck()
+        {
+            MonitorInfo m = Current;
+            bool wasSuspended = _suspend;
+            _suspend = true;
+            if (m == null)
+            {
+                _chkHdr.Enabled = false;
+                _chkHdr.Checked = false;
+            }
+            else
+            {
+                _chkHdr.Enabled = m.HdrSupported && m.HasTarget;
+                _chkHdr.Checked = m.HdrEnabled;
+            }
+            _chkHdr.Invalidate();
+            _suspend = wasSuspended;
+        }
+
         // ==============================================================
         // NVAPI ranges
         // ==============================================================
@@ -623,6 +688,7 @@ namespace ChromaPanel
             UpdateReadouts();
             UpdateSwatch();
             UpdateMonitorInfo();
+            SyncHdrCheck();
             UpdateHint();
             _curve.Show(set);
 
@@ -807,6 +873,30 @@ namespace ChromaPanel
             UpdateDefaultLabel();
         }
 
+        /// <summary>
+        /// Points the preset box at whatever preset the current display is on,
+        /// without applying anything - the display's own values are already
+        /// loaded, so re-applying would be pointless work and a visible flicker.
+        /// </summary>
+        void SelectProfileForCurrentMonitor()
+        {
+            MonitorInfo m = Current;
+            if (m == null) return;
+            string want = _s.ProfileForMonitor(m.Key);
+            if (want == null) return;
+
+            _suspend = true;
+            for (int i = 0; i < _profileOrder.Count; i++)
+            {
+                if (string.Equals(_profileOrder[i], want, StringComparison.OrdinalIgnoreCase))
+                {
+                    _cboProf.SelectedIndex = i;
+                    break;
+                }
+            }
+            _suspend = false;
+        }
+
         void UpdateDefaultLabel()
         {
             string d = string.IsNullOrEmpty(_s.DefaultProfile) ? "(none)" : _s.DefaultProfile;
@@ -825,6 +915,7 @@ namespace ChromaPanel
             PushSlidersToState();
             _s.Profiles.Add(new Profile(n, CurrentSet.Clone()));
             _s.LastProfile = n;
+            foreach (MonitorInfo t in Targets) _s.MonitorProfile[t.Key] = n;
             RefreshProfiles(n);
             SetStatus("Created preset '" + n + "'.", Theme.Ok);
             QueueSave();
@@ -846,6 +937,10 @@ namespace ChromaPanel
             p.Name = n;
             if (string.Equals(_s.DefaultProfile, old, StringComparison.OrdinalIgnoreCase)) _s.DefaultProfile = n;
             if (string.Equals(_s.LastProfile, old, StringComparison.OrdinalIgnoreCase)) _s.LastProfile = n;
+            var rebound = new List<string>();
+            foreach (KeyValuePair<string, string> kv in _s.MonitorProfile)
+                if (string.Equals(kv.Value, old, StringComparison.OrdinalIgnoreCase)) rebound.Add(kv.Key);
+            foreach (string k in rebound) _s.MonitorProfile[k] = n;
             RefreshProfiles(n);
             QueueSave();
         }
@@ -864,7 +959,12 @@ namespace ChromaPanel
             if (p != null) _s.Profiles.Remove(p);
             if (string.Equals(_s.DefaultProfile, n, StringComparison.OrdinalIgnoreCase))
                 _s.DefaultProfile = _s.Profiles[0].Name;
+            var orphaned = new List<string>();
+            foreach (KeyValuePair<string, string> kv in _s.MonitorProfile)
+                if (string.Equals(kv.Value, n, StringComparison.OrdinalIgnoreCase)) orphaned.Add(kv.Key);
+            foreach (string k in orphaned) _s.MonitorProfile.Remove(k);
             RefreshProfiles(_s.DefaultProfile);
+            SelectProfileForCurrentMonitor();
             SetStatus("Deleted '" + n + "'.", Theme.Muted);
             QueueSave();
         }

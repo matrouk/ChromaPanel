@@ -31,6 +31,10 @@ namespace ChromaPanel
         public int ColorMode = -1;       // Ccd.MODE_SDR / MODE_WCG / MODE_HDR
         public int BitsPerColor;
         public bool ColorInfo2Ok;        // the modern API answered
+        public bool HasTarget;           // CCD gave us an addressable target
+        public uint AdapterLow;
+        public int AdapterHigh;
+        public uint TargetId;
         public Rectangle Bounds;
         public string CcdNote = "";          // why CCD data is missing, if it is
         public bool StaleMonitorRecord;      // adapter had no ACTIVE monitor record
@@ -412,6 +416,66 @@ namespace ChromaPanel
             public int BitsPerColor;
             public bool ColorInfo2Ok;
             public bool TargetNameOk;
+            // Needed to address this target again when setting HDR.
+            public uint AdapterLow;
+            public int AdapterHigh;
+            public uint TargetId;
+        }
+
+        // ---- setters -------------------------------------------------
+        [StructLayout(LayoutKind.Sequential)]
+        struct SET_HDR_STATE
+        {
+            public DEVICE_INFO_HEADER header;
+            public uint value;   // bit0 = enableHdr
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct SET_ADVANCED_COLOR_STATE
+        {
+            public DEVICE_INFO_HEADER header;
+            public uint value;   // bit0 = enableAdvancedColor
+        }
+
+        [DllImport("user32.dll")]
+        static extern int DisplayConfigSetDeviceInfo(ref SET_HDR_STATE r);
+        [DllImport("user32.dll")]
+        static extern int DisplayConfigSetDeviceInfo(ref SET_ADVANCED_COLOR_STATE r);
+
+        const uint SET_ADVANCED_COLOR_STATE_TYPE = 10;
+        const uint SET_HDR_STATE_TYPE = 16;
+
+        /// <summary>
+        /// Turns HDR on or off for one target, the same as the Windows Settings
+        /// toggle. Prefers SET_HDR_STATE, which touches HDR only; the older
+        /// SET_ADVANCED_COLOR_STATE is a fallback for pre-24H2 Windows and also
+        /// controls wide colour gamut.
+        /// </summary>
+        public static bool SetHdr(uint adapterLow, int adapterHigh, uint targetId, bool on, out string error)
+        {
+            error = null;
+            var luid = new LUID { LowPart = adapterLow, HighPart = adapterHigh };
+
+            var hdr = new SET_HDR_STATE();
+            hdr.header.type = SET_HDR_STATE_TYPE;
+            hdr.header.size = (uint)Marshal.SizeOf(typeof(SET_HDR_STATE));
+            hdr.header.adapterId = luid;
+            hdr.header.id = targetId;
+            hdr.value = on ? 1u : 0u;
+            int rc = DisplayConfigSetDeviceInfo(ref hdr);
+            if (rc == 0) return true;
+
+            var adv = new SET_ADVANCED_COLOR_STATE();
+            adv.header.type = SET_ADVANCED_COLOR_STATE_TYPE;
+            adv.header.size = (uint)Marshal.SizeOf(typeof(SET_ADVANCED_COLOR_STATE));
+            adv.header.adapterId = luid;
+            adv.header.id = targetId;
+            adv.value = on ? 1u : 0u;
+            int rc2 = DisplayConfigSetDeviceInfo(ref adv);
+            if (rc2 == 0) return true;
+
+            error = "SET_HDR_STATE rc=" + rc + ", SET_ADVANCED_COLOR_STATE rc=" + rc2;
+            return false;
         }
 
         public static string LastError = "";
@@ -491,6 +555,9 @@ namespace ChromaPanel
 
                     var e = new Entry();
                     e.ConnectorRawPath = path.targetInfo.outputTechnology;
+                    e.AdapterLow = path.targetInfo.adapterId.LowPart;
+                    e.AdapterHigh = path.targetInfo.adapterId.HighPart;
+                    e.TargetId = path.targetInfo.id;
 
                     var src = new SOURCE_DEVICE_NAME();
                     src.header.type = GET_SOURCE_NAME;
@@ -869,6 +936,10 @@ namespace ChromaPanel
                     m.ColorMode = e.ColorMode;
                     m.BitsPerColor = e.BitsPerColor;
                     m.ColorInfo2Ok = e.ColorInfo2Ok;
+                    m.AdapterLow = e.AdapterLow;
+                    m.AdapterHigh = e.AdapterHigh;
+                    m.TargetId = e.TargetId;
+                    m.HasTarget = true;
                     if (string.IsNullOrEmpty(m.DevicePath)) m.DevicePath = e.DevicePath;
                     if (!e.TargetNameOk) m.CcdNote = "target-name query failed; connector read from the path record";
                 }

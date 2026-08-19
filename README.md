@@ -24,8 +24,8 @@ Settings live in `%APPDATA%\ChromaPanel\settings.json`.
 
 | | |
 |---|---|
-| **Display** | Pick the monitor to edit. Each keeps its own settings. Tick *Mirror* to change all at once. |
-| **Preset** | Named looks. The one marked `(default)` is selected at startup and used by the tray menu and `--apply`. |
+| **Display** | Pick the monitor to edit. Each keeps its own settings *and its own preset*. Tick *Mirror* to change all at once, or *HDR* to toggle Windows HDR for that display. |
+| **Preset** | Named looks. Switching display switches to that display's preset. A display you have never set one for falls back to the one marked `(default)`, which is also what the tray menu and `--apply` use. |
 | **Colour** | Brightness / contrast / gamma per channel (All, Red, Green, Blue), plus digital vibrance and hue. |
 | **Response** | Live plot of the three output curves. |
 
@@ -106,8 +106,9 @@ elsewhere.
 ### Things that look like bugs but are Windows
 
 - **HDR disables the gamma ramp entirely.** Brightness, contrast and gamma do nothing
-  on an HDR display. ChromaPanel detects this and says so. Wide colour gamut is *not*
-  HDR and does not disable the ramp — see below.
+  on an HDR display. ChromaPanel detects this, says so, and gives you a checkbox to turn
+  HDR off without opening Settings. Wide colour gamut is *not* HDR and does not disable
+  the ramp — see below.
 - **The ramp is wiped** on resume, resolution change and some fullscreen exits.
   ChromaPanel re-applies automatically while it is running.
 - **Windows clamps extreme ramps** (`GdiIcmGammaRange`). ChromaPanel writes, reads back,

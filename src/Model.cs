@@ -183,6 +183,8 @@ namespace ChromaPanel
         public Dictionary<string, ColourSet> Monitors = new Dictionary<string, ColourSet>(StringComparer.OrdinalIgnoreCase);
         // Human-readable name for each key, so the file stays legible.
         public Dictionary<string, string> MonitorNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Which preset each display is on, so switching displays switches preset too.
+        public Dictionary<string, string> MonitorProfile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         public static string Dir
         {
@@ -202,6 +204,19 @@ namespace ChromaPanel
             foreach (Profile p in Profiles)
                 if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;
             return null;
+        }
+
+        /// <summary>
+        /// Which preset this display is on. Falls back to the default preset,
+        /// which is what a display the user has never touched should show.
+        /// </summary>
+        public string ProfileForMonitor(string key)
+        {
+            string n;
+            if (!string.IsNullOrEmpty(key) && MonitorProfile.TryGetValue(key, out n) && Find(n) != null)
+                return n;
+            if (Find(DefaultProfile) != null) return DefaultProfile;
+            return Profiles.Count > 0 ? Profiles[0].Name : null;
         }
 
         public ColourSet ForMonitor(string key)
@@ -290,6 +305,11 @@ namespace ChromaPanel
             if (names != null)
                 foreach (KeyValuePair<string, object> kv in names)
                     MonitorNames[kv.Key] = Json.Str(kv.Value, "");
+
+            var mp = Json.Get(root, "monitorProfile") as Dictionary<string, object>;
+            if (mp != null)
+                foreach (KeyValuePair<string, object> kv in mp)
+                    MonitorProfile[kv.Key] = Json.Str(kv.Value, "");
         }
 
         /// <summary>Old schema: the whole file was { "ProfileName": { R/G/B/Vib } }.</summary>
@@ -336,6 +356,10 @@ namespace ChromaPanel
                 var names = new Dictionary<string, object>();
                 foreach (KeyValuePair<string, string> kv in MonitorNames) names[kv.Key] = kv.Value;
                 root["monitorNames"] = names;
+
+                var mp = new Dictionary<string, object>();
+                foreach (KeyValuePair<string, string> kv in MonitorProfile) mp[kv.Key] = kv.Value;
+                root["monitorProfile"] = mp;
 
                 Directory.CreateDirectory(Dir);
                 // Write to a temp file first so a crash mid-write cannot leave
