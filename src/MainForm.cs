@@ -513,8 +513,9 @@ namespace ChromaPanel
             if (!string.IsNullOrEmpty(m.Geometry)) parts.Add(m.Geometry);
             if (!string.IsNullOrEmpty(m.EdidSerial)) parts.Add("s/n " + m.EdidSerial);
             parts.Add(m.GdiName.Replace(@"\\.\", ""));
-            if (m.HdrEnabled) parts.Add("HDR on");
-            else if (m.HdrSupported) parts.Add("HDR off");
+            if (m.ColorMode >= 0) parts.Add(Ccd.ModeName(m.ColorMode));
+            else if (m.HdrEnabled) parts.Add("HDR on");
+            if (m.BitsPerColor > 0) parts.Add(m.BitsPerColor.ToString(CultureInfo.InvariantCulture) + "-bit");
 
             _lblMonInfo.Text = string.Join("   \u00B7   ", parts.ToArray());
         }
@@ -525,6 +526,8 @@ namespace ChromaPanel
             MonitorInfo m = Current;
             if (m == null) { SetHint(""); return; }
 
+            // Only real HDR bypasses the gamma ramp. Wide colour gamut does not,
+            // so do not warn about it.
             if (m.HdrEnabled)
             {
                 SetHint("HDR is on for this display, and Windows ignores the gamma ramp while it is - brightness, contrast and gamma will do nothing until you turn HDR off. Vibrance still works.");

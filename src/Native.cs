@@ -26,7 +26,11 @@ namespace ChromaPanel
         public uint ConnectorInstance = 0;
         public bool Primary;
         public bool HdrSupported;
-        public bool HdrEnabled;
+        public bool HdrEnabled;          // true HDR only, never wide colour gamut
+        public bool WideColorEnabled;
+        public int ColorMode = -1;       // Ccd.MODE_SDR / MODE_WCG / MODE_HDR
+        public int BitsPerColor;
+        public bool ColorInfo2Ok;        // the modern API answered
         public Rectangle Bounds;
         public string CcdNote = "";          // why CCD data is missing, if it is
         public bool StaleMonitorRecord;      // adapter had no ACTIVE monitor record
@@ -331,6 +335,9 @@ namespace ChromaPanel
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string monitorDevicePath;
         }
 
+        // Legacy (type 9). Its "advancedColorEnabled" bit does NOT mean HDR:
+        // it is set for wide-colour-gamut mode too, so on Windows 11 it reports
+        // a plain WCG display as HDR. Only used when INFO_2 is unavailable.
         [StructLayout(LayoutKind.Sequential)]
         struct ADVANCED_COLOR_INFO
         {
@@ -338,6 +345,18 @@ namespace ChromaPanel
             public uint value;
             public uint colorEncoding;
             public uint bitsPerColorChannel;
+        }
+
+        // Windows 11 24H2+ (type 15). activeColorMode finally distinguishes
+        // SDR / WCG / HDR, which is the only way to answer "is HDR actually on".
+        [StructLayout(LayoutKind.Sequential)]
+        struct ADVANCED_COLOR_INFO_2
+        {
+            public DEVICE_INFO_HEADER header;
+            public uint value;
+            public uint colorEncoding;
+            public uint bitsPerColorChannel;
+            public uint activeColorMode;
         }
 
         [DllImport("user32.dll")]
@@ -350,12 +369,32 @@ namespace ChromaPanel
         static extern int DisplayConfigGetDeviceInfo(ref TARGET_DEVICE_NAME r);
         [DllImport("user32.dll")]
         static extern int DisplayConfigGetDeviceInfo(ref ADVANCED_COLOR_INFO r);
+        [DllImport("user32.dll")]
+        static extern int DisplayConfigGetDeviceInfo(ref ADVANCED_COLOR_INFO_2 r);
 
         const uint QDC_ONLY_ACTIVE_PATHS = 2;
         const uint GET_SOURCE_NAME = 1;
         const uint GET_TARGET_NAME = 2;
         const uint GET_ADVANCED_COLOR_INFO = 9;
+        const uint GET_ADVANCED_COLOR_INFO_2 = 15;
         const int ERROR_INSUFFICIENT_BUFFER = 122;
+
+        // activeColorMode
+        public const int MODE_UNKNOWN = -1;
+        public const int MODE_SDR = 0;
+        public const int MODE_WCG = 1;
+        public const int MODE_HDR = 2;
+
+        public static string ModeName(int m)
+        {
+            switch (m)
+            {
+                case MODE_SDR: return "SDR";
+                case MODE_WCG: return "Wide colour gamut";
+                case MODE_HDR: return "HDR";
+                default: return "unknown";
+            }
+        }
 
         public class Entry
         {
@@ -368,6 +407,10 @@ namespace ChromaPanel
             public uint ConnectorInstance;
             public bool HdrSupported;
             public bool HdrEnabled;
+            public bool WideColorEnabled;
+            public int ColorMode = MODE_UNKNOWN;
+            public int BitsPerColor;
+            public bool ColorInfo2Ok;
             public bool TargetNameOk;
         }
 
@@ -477,15 +520,43 @@ namespace ChromaPanel
                         e.ConnectorRaw = path.targetInfo.outputTechnology;
                     }
 
-                    var adv = new ADVANCED_COLOR_INFO();
-                    adv.header.type = GET_ADVANCED_COLOR_INFO;
-                    adv.header.size = (uint)Marshal.SizeOf(typeof(ADVANCED_COLOR_INFO));
-                    adv.header.adapterId = path.targetInfo.adapterId;
-                    adv.header.id = path.targetInfo.id;
-                    if (DisplayConfigGetDeviceInfo(ref adv) == 0)
+                    // Prefer INFO_2: it separates HDR from wide colour gamut.
+                    var adv2 = new ADVANCED_COLOR_INFO_2();
+                    adv2.header.type = GET_ADVANCED_COLOR_INFO_2;
+                    adv2.header.size = (uint)Marshal.SizeOf(typeof(ADVANCED_COLOR_INFO_2));
+                    adv2.header.adapterId = path.targetInfo.adapterId;
+                    adv2.header.id = path.targetInfo.id;
+                    if (DisplayConfigGetDeviceInfo(ref adv2) == 0)
                     {
-                        e.HdrSupported = (adv.value & 0x1) != 0;
-                        e.HdrEnabled = (adv.value & 0x2) != 0;
+                        e.ColorInfo2Ok = true;
+                        e.HdrSupported = (adv2.value & 0x10) != 0;   // highDynamicRangeSupported
+                        e.HdrEnabled = (adv2.value & 0x20) != 0;     // highDynamicRangeUserEnabled
+                        e.WideColorEnabled = (adv2.value & 0x80) != 0; // wideColorUserEnabled
+                        e.BitsPerColor = (int)adv2.bitsPerColorChannel;
+                        e.ColorMode = (int)adv2.activeColorMode;
+                        // activeColorMode is authoritative if it disagrees.
+                        if (e.ColorMode == MODE_HDR) e.HdrEnabled = true;
+                        else if (e.ColorMode == MODE_SDR || e.ColorMode == MODE_WCG) e.HdrEnabled = false;
+                    }
+                    else
+                    {
+                        var adv = new ADVANCED_COLOR_INFO();
+                        adv.header.type = GET_ADVANCED_COLOR_INFO;
+                        adv.header.size = (uint)Marshal.SizeOf(typeof(ADVANCED_COLOR_INFO));
+                        adv.header.adapterId = path.targetInfo.adapterId;
+                        adv.header.id = path.targetInfo.id;
+                        if (DisplayConfigGetDeviceInfo(ref adv) == 0)
+                        {
+                            bool advancedActive = (adv.value & 0x2) != 0;
+                            bool wideEnforced = (adv.value & 0x4) != 0;
+                            e.HdrSupported = (adv.value & 0x1) != 0;
+                            // advancedColorEnabled alone is not HDR - it is also
+                            // set for WCG. wideColorEnforced tells them apart.
+                            e.HdrEnabled = advancedActive && !wideEnforced;
+                            e.WideColorEnabled = advancedActive && wideEnforced;
+                            e.BitsPerColor = (int)adv.bitsPerColorChannel;
+                            e.ColorMode = e.HdrEnabled ? MODE_HDR : (e.WideColorEnabled ? MODE_WCG : MODE_SDR);
+                        }
                     }
 
                     // Keep every path, even ones without a source name - the
@@ -794,6 +865,10 @@ namespace ChromaPanel
                     m.ConnectorInstance = e.ConnectorInstance;
                     m.HdrSupported = e.HdrSupported;
                     m.HdrEnabled = e.HdrEnabled;
+                    m.WideColorEnabled = e.WideColorEnabled;
+                    m.ColorMode = e.ColorMode;
+                    m.BitsPerColor = e.BitsPerColor;
+                    m.ColorInfo2Ok = e.ColorInfo2Ok;
                     if (string.IsNullOrEmpty(m.DevicePath)) m.DevicePath = e.DevicePath;
                     if (!e.TargetNameOk) m.CcdNote = "target-name query failed; connector read from the path record";
                 }

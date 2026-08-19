@@ -50,7 +50,10 @@ namespace ChromaPanel
                 if (!string.IsNullOrEmpty(m.CcdNote)) sb.AppendLine("  ccd note        : " + m.CcdNote);
                 sb.AppendLine("  -- state ------------------------------------------------");
                 sb.AppendLine("  geometry        : " + Blank(m.Geometry) + " at " + m.Bounds.X + "," + m.Bounds.Y);
+                sb.AppendLine("  colour mode     : " + Ccd.ModeName(m.ColorMode)
+                              + (m.ColorInfo2Ok ? "   (GET_ADVANCED_COLOR_INFO_2)" : "   (legacy GET_ADVANCED_COLOR_INFO)"));
                 sb.AppendLine("  hdr             : supported=" + m.HdrSupported + "  enabled=" + m.HdrEnabled);
+                sb.AppendLine("  wide gamut      : " + m.WideColorEnabled + "      bits per colour: " + m.BitsPerColor);
                 sb.AppendLine("  nvapi           : " + NvApi.Describe(m.GdiName));
 
                 NvApi.NV_LEVEL v;

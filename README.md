@@ -106,7 +106,8 @@ elsewhere.
 ### Things that look like bugs but are Windows
 
 - **HDR disables the gamma ramp entirely.** Brightness, contrast and gamma do nothing
-  on an HDR display. ChromaPanel detects this and says so.
+  on an HDR display. ChromaPanel detects this and says so. Wide colour gamut is *not*
+  HDR and does not disable the ramp — see below.
 - **The ramp is wiped** on resume, resolution change and some fullscreen exits.
   ChromaPanel re-applies automatically while it is running.
 - **Windows clamps extreme ramps** (`GdiIcmGammaRange`). ChromaPanel writes, reads back,
@@ -127,6 +128,15 @@ monitor's name:
    unplugged months ago — the same one for every display.
 3. Two panels of the same model share a friendly name. Distinguish them by connector,
    connector instance and EDID serial.
+
+And one more, for HDR rather than naming:
+
+4. `DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO`'s `advancedColorEnabled` bit **does not mean
+   HDR**. It is also set when the display is merely in wide-colour-gamut mode, so a
+   Windows 11 WCG display reports as HDR. Use
+   `DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO_2` (type **15**, 36 bytes) and read
+   `activeColorMode` (0 = SDR, 1 = WCG, 2 = HDR). Where that is unavailable, fall back to
+   `advancedColorEnabled && !wideColorEnforced`.
 
 Names are taken from CCD first (what Windows Settings shows), then the EDID descriptor,
 then `EnumDisplayDevices` last, because only the first two read the live connection.
