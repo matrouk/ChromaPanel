@@ -54,6 +54,55 @@ namespace ChromaPanel
             for (int i = 0; i < 768; i++) if (r3[i] > 65535) inRange = false;
             Check(inRange, "extreme values stay in range");
 
+            // ---- channel interaction (All vs R/G/B) ----
+            char[] ALL = { 'R', 'G', 'B' };
+            char[] RED = { 'R' };
+
+            // Per-channel edit, then an unrelated slider moved in "All" mode.
+            // The unrelated properties must survive.
+            var mix = new ColourSet();
+            mix.Set(Adjustable.Brightness, RED, 70);          // red-only tint
+            mix.Set(Adjustable.Contrast, ALL, 60);            // then contrast on all
+            Check(mix.R.Brightness == 70, "All-channel contrast leaves red brightness alone");
+            Check(mix.G.Brightness == 50 && mix.B.Brightness == 50,
+                  "All-channel contrast does not stamp brightness onto G and B");
+            Check(mix.R.Contrast == 60 && mix.G.Contrast == 60 && mix.B.Contrast == 60,
+                  "All-channel contrast reaches every channel");
+            Check(mix.R.Gamma == 1.0 && mix.G.Gamma == 1.0 && mix.B.Gamma == 1.0,
+                  "All-channel contrast leaves gamma alone");
+
+            // A single-channel edit must not touch the other two.
+            var one = new ColourSet();
+            one.Set(Adjustable.Gamma, RED, 1.8);
+            Check(one.R.Gamma == 1.8, "single-channel gamma applies");
+            Check(one.G.Gamma == 1.0 && one.B.Gamma == 1.0, "single-channel gamma spares G and B");
+            Check(one.R.Brightness == 50 && one.R.Contrast == 50,
+                  "single-channel gamma spares that channel's other properties");
+
+            // Levelling: moving a property in All mode makes just that one uniform.
+            var lvl = new ColourSet();
+            lvl.Set(Adjustable.Brightness, RED, 70);
+            lvl.Set(Adjustable.Gamma, new[] { 'G' }, 1.5);
+            Check(!lvl.Uniform(Adjustable.Brightness) && !lvl.Uniform(Adjustable.Gamma),
+                  "Uniform reports both properties as differing");
+            lvl.Set(Adjustable.Brightness, ALL, 55);
+            Check(lvl.Uniform(Adjustable.Brightness), "All-mode brightness levels brightness");
+            Check(!lvl.Uniform(Adjustable.Gamma), "...without levelling gamma");
+            Check(lvl.G.Gamma == 1.5, "the per-channel gamma survives");
+
+            // The ramp must reflect an isolated per-channel change.
+            var tint = new ColourSet();
+            tint.Set(Adjustable.Brightness, RED, 70);
+            ushort[] tr = Ramp.Build(tint);
+            ushort[] flat = Ramp.Build(new ColourSet());
+            bool gbSame = true, rMoved = false;
+            for (int i = 0; i < 256; i++)
+            {
+                if (tr[256 + i] != flat[256 + i] || tr[512 + i] != flat[512 + i]) gbSame = false;
+                if (tr[i] != flat[i]) rMoved = true;
+            }
+            Check(gbSame && rMoved, "a red-only brightness tint shows up in R alone");
+
             // ---- JSON round trip ----
             var cs = new ColourSet();
             cs.R.Brightness = 61.5; cs.G.Contrast = 44; cs.B.Gamma = 1.35;

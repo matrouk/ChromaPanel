@@ -29,6 +29,9 @@ namespace ChromaPanel
         }
     }
 
+    /// <summary>Which of the three per-channel curves a slider drives.</summary>
+    public enum Adjustable { Brightness, Contrast, Gamma }
+
     /// <summary>A complete look: three channels plus the two NVAPI values.</summary>
     public class ColourSet
     {
@@ -51,6 +54,47 @@ namespace ChromaPanel
         public ColourSet Clone()
         {
             return new ColourSet { R = R.Clone(), G = G.Clone(), B = B.Clone(), Vibrance = Vibrance, Hue = Hue };
+        }
+
+        /// <summary>
+        /// Writes ONE property to the given channels and leaves the rest alone.
+        ///
+        /// This is deliberately narrow. Writing all three properties whenever
+        /// any slider moved meant that, with "All channels" selected, nudging
+        /// contrast also stamped the brightness and gamma shown on screen
+        /// (which are read from red) onto green and blue - silently destroying
+        /// any per-channel adjustment.
+        /// </summary>
+        public void Set(Adjustable p, char[] channels, double value)
+        {
+            if (channels == null) return;
+            foreach (char c in channels)
+            {
+                Adjust a = this[c];
+                switch (p)
+                {
+                    case Adjustable.Brightness: a.Brightness = value; break;
+                    case Adjustable.Contrast: a.Contrast = value; break;
+                    case Adjustable.Gamma: a.Gamma = value; break;
+                }
+            }
+        }
+
+        public double Get(Adjustable p, char channel)
+        {
+            Adjust a = this[channel];
+            switch (p)
+            {
+                case Adjustable.Brightness: return a.Brightness;
+                case Adjustable.Contrast: return a.Contrast;
+                default: return a.Gamma;
+            }
+        }
+
+        /// <summary>True when this one property is the same on all three channels.</summary>
+        public bool Uniform(Adjustable p)
+        {
+            return Get(p, 'R') == Get(p, 'G') && Get(p, 'G') == Get(p, 'B');
         }
 
         public bool IsNeutral
@@ -167,7 +211,7 @@ namespace ChromaPanel
     /// <summary>Everything that gets persisted. Written automatically, never by a Save button.</summary>
     public class AppSettings
     {
-        public const string Version = "1.0.0";
+        public const string Version = "1.0.1";
 
         public List<Profile> Profiles = new List<Profile>();
         public string DefaultProfile = "";

@@ -332,12 +332,23 @@ namespace ChromaPanel
         // ==============================================================
         void HookEvents()
         {
-            EventHandler onSlide = delegate { if (!_suspend) { PushSlidersToState(); ApplyCurrent(); QueueSave(); } };
-            _rowB.Bar.ValueChanged += onSlide;
-            _rowC.Bar.ValueChanged += onSlide;
-            _rowG.Bar.ValueChanged += onSlide;
-            _rowV.Bar.ValueChanged += onSlide;
-            _rowH.Bar.ValueChanged += onSlide;
+            // Each slider writes only its own property. A shared handler that
+            // committed all three is what let contrast clobber brightness.
+            _rowB.Bar.ValueChanged += delegate { EditChannel(Adjustable.Brightness, _rowB.Bar.Value); };
+            _rowC.Bar.ValueChanged += delegate { EditChannel(Adjustable.Contrast, _rowC.Bar.Value); };
+            _rowG.Bar.ValueChanged += delegate { EditChannel(Adjustable.Gamma, _rowG.Bar.Value / 100.0); };
+            _rowV.Bar.ValueChanged += delegate
+            {
+                if (_suspend) return;
+                CurrentSet.Vibrance = _rowV.Bar.Value;
+                CommitEdit(); ApplyCurrent(); QueueSave();
+            };
+            _rowH.Bar.ValueChanged += delegate
+            {
+                if (_suspend) return;
+                CurrentSet.Hue = _rowH.Bar.Value;
+                CommitEdit(); ApplyCurrent(); QueueSave();
+            };
 
             _cboMon.SelectedIndexChanged += delegate
             {
@@ -377,7 +388,7 @@ namespace ChromaPanel
             _chkAll.CheckedChanged += delegate
             {
                 _s.LinkAllMonitors = _chkAll.Checked;
-                if (_chkAll.Checked) { PushSlidersToState(); ApplyCurrent(); }
+                if (_chkAll.Checked) { CommitEdit(); ApplyCurrent(); }
                 QueueSave();
             };
 
@@ -692,24 +703,23 @@ namespace ChromaPanel
             UpdateHint();
             _curve.Show(set);
 
-            _lblMixed.Text = (_cboCh.SelectedIndex == 0 && !set.ChannelsMatch)
-                ? "channels differ - moving a slider levels all three"
-                : "";
+            UpdateMixedHint(set);
         }
 
-        void PushSlidersToState()
+        /// <summary>One slider moved: write that property to the selected channels only.</summary>
+        void EditChannel(Adjustable p, double value)
+        {
+            if (_suspend) return;
+            CurrentSet.Set(p, ActiveChannels, value);
+            CommitEdit();
+            ApplyCurrent();
+            QueueSave();
+        }
+
+        /// <summary>Mirror, sync the preset, and refresh the read-outs after any edit.</summary>
+        void CommitEdit()
         {
             ColourSet set = CurrentSet;
-            foreach (char c in ActiveChannels)
-            {
-                Adjust a = set[c];
-                a.Brightness = _rowB.Bar.Value;
-                a.Contrast = _rowC.Bar.Value;
-                a.Gamma = _rowG.Bar.Value / 100.0;
-            }
-            set.Vibrance = _rowV.Bar.Value;
-            set.Hue = _rowH.Bar.Value;
-
             if (_chkAll.Checked) MirrorToAll(set);
 
             // The selected preset tracks your edits - there is no Save button.
@@ -718,9 +728,22 @@ namespace ChromaPanel
 
             UpdateReadouts();
             _curve.Show(set);
-            _lblMixed.Text = (_cboCh.SelectedIndex == 0 && !set.ChannelsMatch)
-                ? "channels differ - moving a slider levels all three"
-                : "";
+            UpdateMixedHint(set);
+        }
+
+        /// <summary>Names the properties that currently differ between channels.</summary>
+        void UpdateMixedHint(ColourSet set)
+        {
+            if (_cboCh.SelectedIndex != 0) { _lblMixed.Text = ""; return; }
+
+            var differing = new List<string>();
+            if (!set.Uniform(Adjustable.Brightness)) differing.Add("brightness");
+            if (!set.Uniform(Adjustable.Contrast)) differing.Add("contrast");
+            if (!set.Uniform(Adjustable.Gamma)) differing.Add("gamma");
+
+            _lblMixed.Text = differing.Count == 0
+                ? ""
+                : "per-channel " + string.Join("/", differing.ToArray()) + " - shows red";
         }
 
         void MirrorToAll(ColourSet set)
@@ -912,7 +935,6 @@ namespace ChromaPanel
                 MessageBox.Show(this, "A preset named '" + n + "' already exists.", "ChromaPanel");
                 return;
             }
-            PushSlidersToState();
             _s.Profiles.Add(new Profile(n, CurrentSet.Clone()));
             _s.LastProfile = n;
             foreach (MonitorInfo t in Targets) _s.MonitorProfile[t.Key] = n;
@@ -1002,7 +1024,7 @@ namespace ChromaPanel
         {
             foreach (MonitorInfo m in Targets) Neutralise(m);
             LoadSlidersFromState();
-            PushSlidersToState();
+            CommitEdit();
             ApplyCurrent();
             SetStatus("Reset to neutral.", Theme.Muted);
             QueueSave();
