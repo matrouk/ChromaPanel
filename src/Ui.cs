@@ -545,4 +545,87 @@ namespace ChromaPanel
             }
         }
     }
+
+    /// <summary>Click it, press a combination, done. Backspace or Delete clears it.</summary>
+    internal class HotkeyBox : TextBox
+    {
+        Hotkey _value;
+        public event EventHandler HotkeyChanged;
+
+        public HotkeyBox()
+        {
+            ReadOnly = true;
+            ShortcutsEnabled = false;
+            BackColor = Color.FromArgb(44, 44, 54);
+            ForeColor = Theme.Text;
+            BorderStyle = BorderStyle.FixedSingle;
+            Font = Theme.UI(9f);
+            Cursor = Cursors.Hand;
+            TextAlign = HorizontalAlignment.Center;
+        }
+
+        public Hotkey Value
+        {
+            get { return _value; }
+            set { _value = value; Text = value.IsEmpty ? "None" : value.ToString(); }
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            BackColor = Color.FromArgb(56, 64, 92);
+            Text = "Press a shortcut...";
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            BackColor = Color.FromArgb(44, 44, 54);
+            Value = _value;
+        }
+
+        protected override bool IsInputKey(Keys keyData) { return true; }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            Keys key = e.KeyCode;
+
+            if ((key == Keys.Back || key == Keys.Delete) && e.Modifiers == Keys.None)
+            {
+                Commit(Hotkey.None);
+                return;
+            }
+            if (key == Keys.Escape && e.Modifiers == Keys.None)
+            {
+                Parent.SelectNextControl(this, true, true, true, true);
+                return;
+            }
+            if (Hotkey.IsModifierKey(key))
+            {
+                // Show the partial combination while the user is still building it.
+                Hotkey partial = Hotkey.From(e.Modifiers, Keys.None);
+                string s = partial.Modifiers == 0 ? "" : new Hotkey { Modifiers = partial.Modifiers, Key = Keys.A }.ToString();
+                Text = s.Length > 2 ? s.Substring(0, s.Length - 1) + "..." : "Press a shortcut...";
+                return;
+            }
+
+            Hotkey h = Hotkey.From(e.Modifiers, key);
+            if (!h.IsUsable)
+            {
+                Text = "Add Ctrl, Alt or Shift";
+                return;
+            }
+            Commit(h);
+        }
+
+        void Commit(Hotkey h)
+        {
+            _value = h;
+            Text = h.IsEmpty ? "None" : h.ToString();
+            if (HotkeyChanged != null) HotkeyChanged(this, EventArgs.Empty);
+            if (Parent != null) Parent.SelectNextControl(this, true, true, true, true);
+        }
+    }
 }

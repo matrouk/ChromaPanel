@@ -24,6 +24,8 @@ namespace ChromaPanel
             sb.AppendLine("CCD used        : " + Displays.CcdUsed);
             if (!string.IsNullOrEmpty(Displays.CcdError)) sb.AppendLine("CCD note        : " + Displays.CcdError);
             sb.AppendLine();
+            AppendSharpening(sb);
+            sb.AppendLine();
             sb.AppendLine("Displays found  : " + mons.Count);
             sb.AppendLine(new string('-', 78));
 
@@ -64,7 +66,7 @@ namespace ChromaPanel
 
                 NvApi.NV_LEVEL h;
                 if (NvApi.Available && NvApi.GetHue(m.GdiName, out h))
-                    sb.AppendLine("  hue             : cur=" + h.currentLevel + " min=" + h.minLevel + " max=" + h.maxLevel + " def=" + h.defaultLevel);
+                    sb.AppendLine("  hue             : cur=" + h.currentLevel + " def=" + h.defaultLevel + "   (range 0-359)");
                 else
                     sb.AppendLine("  hue             : unavailable (" + NvApi.LastError + ")");
             }
@@ -74,6 +76,24 @@ namespace ChromaPanel
             sb.AppendLine("outputTechnology codes: 0=VGA 4=DVI 5=HDMI 10=DisplayPort 11=DP embedded");
             sb.AppendLine("                        0x80000000=Internal 0xFFFFFFFF=Other");
             return sb.ToString();
+        }
+
+        /// <summary>Raw driver values, so a mismatch with NVIDIA's panel is diagnosable.</summary>
+        static void AppendSharpening(StringBuilder sb)
+        {
+            Sharpening.State st = Sharpening.Read();
+            if (!st.Available)
+            {
+                sb.AppendLine("Sharpening      : unavailable (" + st.Error + ")");
+                return;
+            }
+            sb.AppendLine("Sharpening      : " + (st.Enabled ? "on, " + st.Percent + "%" : "off"));
+            foreach (uint id in new[] { Sharpening.ID_NIS_ENABLE, Sharpening.ID_SHARPEN_ON, Sharpening.ID_SHARPEN_VALUE })
+            {
+                uint v;
+                string val = st.Raw.TryGetValue(id, out v) ? v.ToString(CultureInfo.InvariantCulture) : "(not set - driver default)";
+                sb.AppendLine("  0x" + id.ToString("X8") + "      : " + val);
+            }
         }
 
         static string Blank(string s) { return string.IsNullOrEmpty(s) ? "(empty)" : s; }

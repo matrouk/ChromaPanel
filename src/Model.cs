@@ -32,6 +32,9 @@ namespace ChromaPanel
     /// <summary>Which of the three per-channel curves a slider drives.</summary>
     public enum Adjustable { Brightness, Contrast, Gamma }
 
+    /// <summary>Desktop filters. Values are stored in settings, so append only.</summary>
+    public enum SharpenFilter { Cas = 0, Rcas = 1, Luma = 2, Adaptive = 3, Anime4K = 4 }
+
     /// <summary>A complete look: three channels plus the two NVAPI values.</summary>
     public class ColourSet
     {
@@ -211,7 +214,7 @@ namespace ChromaPanel
     /// <summary>Everything that gets persisted. Written automatically, never by a Save button.</summary>
     public class AppSettings
     {
-        public const string Version = "1.0.1";
+        public const string Version = "1.1.0";
 
         public List<Profile> Profiles = new List<Profile>();
         public string DefaultProfile = "";
@@ -222,6 +225,36 @@ namespace ChromaPanel
         public bool LinkAllMonitors;
         public string LastMonitorKey = "";
         public string LastProfile = "";
+
+        // Blackout (OLED screen-off that coexists with OBS)
+        public string BlackoutHotkey = "Ctrl+Alt+B";
+        public string BlackoutTarget = "";          // "" = every display, else a monitor key
+        public bool BlackoutHideFromCapture = true; // keep OBS recording what is underneath
+
+        // Desktop sharpening (overlay, see DesktopSharpen.cs)
+        public bool DesktopSharpenEnabled;
+        public string DesktopSharpenFilter = "cas";  // cas | rcas | luma | adaptive | anime4k
+        public int DesktopSharpenStrength = 40;      // 0..100
+        public string DesktopSharpenTarget = "";     // "" = every display, else a monitor key
+
+        static readonly string[] FilterNames = { "cas", "rcas", "luma", "adaptive", "anime4k" };
+
+        /// <summary>Unknown names (a newer or hand-edited file) fall back to CAS.</summary>
+        public SharpenFilter DesktopFilter
+        {
+            get
+            {
+                for (int i = 0; i < FilterNames.Length; i++)
+                    if (string.Equals(DesktopSharpenFilter, FilterNames[i], StringComparison.OrdinalIgnoreCase))
+                        return (SharpenFilter)i;
+                return SharpenFilter.Cas;
+            }
+            set
+            {
+                int i = (int)value;
+                DesktopSharpenFilter = i >= 0 && i < FilterNames.Length ? FilterNames[i] : "cas";
+            }
+        }
 
         // Live per-monitor values, keyed by MonitorInfo.Key.
         public Dictionary<string, ColourSet> Monitors = new Dictionary<string, ColourSet>(StringComparer.OrdinalIgnoreCase);
@@ -339,6 +372,15 @@ namespace ChromaPanel
             MinimiseToTray = Json.Bool(Json.Get(root, "minimiseToTray"), true);
             StartMinimised = Json.Bool(Json.Get(root, "startMinimised"), false);
             LinkAllMonitors = Json.Bool(Json.Get(root, "linkAllMonitors"), false);
+            // A missing key means "default shortcut"; an empty string means the user cleared it.
+            object hk = Json.Get(root, "blackoutHotkey");
+            BlackoutHotkey = hk == null ? "Ctrl+Alt+B" : (hk as string ?? "");
+            BlackoutTarget = Json.Str(Json.Get(root, "blackoutTarget"), "");
+            BlackoutHideFromCapture = Json.Bool(Json.Get(root, "blackoutHideFromCapture"), true);
+            DesktopSharpenEnabled = Json.Bool(Json.Get(root, "desktopSharpenEnabled"), false);
+            DesktopSharpenFilter = Json.Str(Json.Get(root, "desktopSharpenFilter"), "cas");
+            DesktopSharpenStrength = Math.Max(0, Math.Min(100, Json.Int(Json.Get(root, "desktopSharpenStrength"), 40)));
+            DesktopSharpenTarget = Json.Str(Json.Get(root, "desktopSharpenTarget"), "");
 
             var mons = Json.Get(root, "monitors") as Dictionary<string, object>;
             if (mons != null)
@@ -392,6 +434,13 @@ namespace ChromaPanel
                 root["minimiseToTray"] = MinimiseToTray;
                 root["startMinimised"] = StartMinimised;
                 root["linkAllMonitors"] = LinkAllMonitors;
+                root["blackoutHotkey"] = BlackoutHotkey ?? "";
+                root["blackoutTarget"] = BlackoutTarget ?? "";
+                root["blackoutHideFromCapture"] = BlackoutHideFromCapture;
+                root["desktopSharpenEnabled"] = DesktopSharpenEnabled;
+                root["desktopSharpenFilter"] = DesktopSharpenFilter ?? "cas";
+                root["desktopSharpenStrength"] = DesktopSharpenStrength;
+                root["desktopSharpenTarget"] = DesktopSharpenTarget ?? "";
 
                 var mons = new Dictionary<string, object>();
                 foreach (KeyValuePair<string, ColourSet> kv in Monitors) mons[kv.Key] = kv.Value.ToJson();

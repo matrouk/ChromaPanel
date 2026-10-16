@@ -33,7 +33,32 @@ namespace ChromaPanel
         CurvePreview _curve;
         SliderRow _rowB, _rowC, _rowG, _rowV, _rowH;
         NotifyIcon _tray;
-        Timer _saveTimer, _displayTimer, _savedFlash;
+        Timer _saveTimer, _displayTimer, _savedFlash, _sharpTimer;
+
+        // desktop sharpening (capture -> shader -> overlay)
+        DarkCheck _chkDesk;
+        DarkCombo _cboDeskFilter, _cboDeskTarget;
+        SliderRow _rowDesk;
+        Label _lblDeskNote;
+        readonly List<string> _deskTargetKeys = new List<string>();
+        readonly DesktopSharpen _desk = new DesktopSharpen();
+        Timer _deskStatusTimer;
+        ToolStripMenuItem _trayDesk;
+
+        // sharpening (NVIDIA Image Scaling) - lives in the driver, not in our settings
+        DarkCheck _chkNis;
+        SliderRow _rowSharp;
+        Label _lblSharpNote;
+
+        // blackout
+        HotkeyBox _hkBlack;
+        DarkCombo _cboBlackTarget;
+        DarkCheck _chkBlackCapture;
+        FlatButton _btnBlackout;
+        Label _lblBlackHint;
+        readonly List<string> _blackTargetKeys = new List<string>();
+        Blackout _blackout;
+        const int HOTKEY_BLACKOUT = 0xB1AC;
 
         [DllImport("dwmapi.dll")]
         static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
@@ -49,6 +74,8 @@ namespace ChromaPanel
             LoadSlidersFromState();
             SelectProfileForCurrentMonitor();
             UpdateDefaultLabel();
+            LoadSharpening();
+            UpdateDesktopSharpen();
 
             if (_s.ApplyOnLaunch) ApplyAll("Restored saved settings.");
             else SetStatus("Ready. Nothing applied yet.", Theme.Muted);
@@ -60,7 +87,7 @@ namespace ChromaPanel
         void BuildUi()
         {
             Text = "ChromaPanel";
-            ClientSize = new Size(620, 876);
+            ClientSize = new Size(1220, 784);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -83,12 +110,12 @@ namespace ChromaPanel
             sub.Font = Theme.UI(8.5f);
             sub.ForeColor = Theme.Faint;
             sub.TextAlign = ContentAlignment.MiddleRight;
-            sub.SetBounds(304, 18, 300, 18);
+            sub.SetBounds(904, 18, 300, 18);
             sub.BackColor = Color.Transparent;
             Controls.Add(sub);
 
             // ---------------- display ----------------
-            var cardD = NewCard("Display", 52, 104);
+            var cardD = NewCard("Display", 16, 52, 104);
 
             _cboMon = new DarkCombo();
             _cboMon.SetBounds(14, 30, 560, 24);
@@ -109,7 +136,7 @@ namespace ChromaPanel
             cardD.Controls.Add(_chkHdr);
 
             // ---------------- preset ----------------
-            var cardP = NewCard("Preset", 168, 96);
+            var cardP = NewCard("Preset", 16, 168, 96);
 
             _cboProf = new DarkCombo();
             _cboProf.SetBounds(14, 28, 240, 24);
@@ -124,7 +151,7 @@ namespace ChromaPanel
             cardP.Controls.Add(_lblDefault);
 
             // ---------------- colour ----------------
-            var cardC = NewCard("Colour adjustment", 276, 332);
+            var cardC = NewCard("Colour adjustment", 16, 276, 332);
 
             var lblCh = new Label();
             lblCh.Text = "Channel";
@@ -158,25 +185,104 @@ namespace ChromaPanel
             _rowV.Bar.Fill = Color.FromArgb(196, 112, 240);
             _rowH.Bar.Fill = Color.FromArgb(240, 160, 80);
 
+            // ---------------- sharpening (right column) ----------------
+            var cardN = NewCard("Sharpening", 616, 52, 270);
+
+            // desktop
+            _chkDesk = NewCheck(cardN, "Sharpen the desktop", 14, 30, 160);
+            _chkDesk.Checked = _s.DesktopSharpenEnabled;
+
+            // Order matches the SharpenFilter enum.
+            _cboDeskFilter = new DarkCombo();
+            _cboDeskFilter.SetBounds(180, 27, 250, 24);
+            _cboDeskFilter.Items.AddRange(new object[]
+            {
+                "AMD CAS  \u00B7  everyday & text",
+                "AMD FSR 1 RCAS  \u00B7  games",
+                "Luma sharpen  \u00B7  text, no colour fringes",
+                "AdaptiveSharpen  \u00B7  TV shows & video",
+                "Anime4K Restore  \u00B7  anime"
+            });
+            _cboDeskFilter.SelectedIndex = (int)_s.DesktopFilter;
+            cardN.Controls.Add(_cboDeskFilter);
+
+            _cboDeskTarget = new DarkCombo();
+            _cboDeskTarget.SetBounds(438, 27, 136, 24);
+            _cboDeskTarget.DropDownWidth = 280;
+            cardN.Controls.Add(_cboDeskTarget);
+
+            _rowDesk = NewRow(cardN, "Desktop strength", 58, 0, 100, _s.DesktopSharpenStrength, 1.0, "%", "0");
+            _rowDesk.Bar.Fill = Color.FromArgb(56, 189, 168);
+            _lblDeskNote = Muted(14, 106, 560, 30, 8f);
+            _lblDeskNote.AutoEllipsis = true;
+            cardN.Controls.Add(_lblDeskNote);
+
+            var sep = new Panel();
+            sep.SetBounds(14, 142, 560, 1);
+            sep.BackColor = Theme.CardEdge;
+            cardN.Controls.Add(sep);
+
+            // games
+            _chkNis = NewCheck(cardN, "Sharpen games with NVIDIA Image Scaling (NIS)", 14, 152, 400);
+            _rowSharp = NewRow(cardN, "Game strength", 178, 0, 100, Sharpening.DefaultPercent, 1.0, "%", "0");
+            _rowSharp.Bar.Fill = Color.FromArgb(56, 189, 168);
+            _lblSharpNote = Muted(14, 226, 560, 40, 8f);
+            cardN.Controls.Add(_lblSharpNote);
+
+            // ---------------- blackout ----------------
+            var cardB = NewCard("Blackout", 616, 334, 150);
+
+            var lblKey = new Label();
+            lblKey.Text = "Shortcut";
+            lblKey.SetBounds(14, 33, 66, 20);
+            lblKey.ForeColor = Theme.Text;
+            lblKey.BackColor = Color.Transparent;
+            cardB.Controls.Add(lblKey);
+
+            _hkBlack = new HotkeyBox();
+            _hkBlack.SetBounds(82, 30, 172, 24);
+            _hkBlack.Value = Hotkey.Parse(_s.BlackoutHotkey);
+            cardB.Controls.Add(_hkBlack);
+
+            var lblOn = new Label();
+            lblOn.Text = "Displays";
+            lblOn.SetBounds(272, 33, 64, 20);
+            lblOn.ForeColor = Theme.Text;
+            lblOn.BackColor = Color.Transparent;
+            cardB.Controls.Add(lblOn);
+
+            _cboBlackTarget = new DarkCombo();
+            _cboBlackTarget.SetBounds(338, 29, 236, 24);
+            cardB.Controls.Add(_cboBlackTarget);
+
+            _chkBlackCapture = NewCheck(cardB, "Keep OBS / screen capture recording what's underneath", 14, 62, 560);
+            _chkBlackCapture.Checked = _s.BlackoutHideFromCapture;
+
+            _btnBlackout = NewButton(cardB, "Black out now", 14, 94, 130);
+            _lblBlackHint = Muted(156, 92, 418, 50, 8f);
+            _lblBlackHint.Text = "Pure black, so OLED pixels switch off. A key, click, scroll or a deliberate mouse move brings it back. Nothing underneath loses focus.";
+            cardB.Controls.Add(_lblBlackHint);
+
             // ---------------- preview + status ----------------
-            var cardS = NewCard("Response", 620, 104);
+            var cardS = NewCard("Response", 16, 620, 1188, 104);
 
             _curve = new CurvePreview();
             _curve.SetBounds(14, 28, 180, 62);
             cardS.Controls.Add(_curve);
 
             _lblStatus = new Label();
-            _lblStatus.SetBounds(206, 28, 368, 20);
+            _lblStatus.SetBounds(206, 28, 968, 20);
             _lblStatus.ForeColor = Theme.Muted;
             _lblStatus.BackColor = Color.Transparent;
             _lblStatus.Font = Theme.UI(9f);
+            _lblStatus.AutoEllipsis = true;   // never cut a message off silently
             cardS.Controls.Add(_lblStatus);
 
-            _lblHint = Muted(206, 50, 368, 40, 8f);
+            _lblHint = Muted(206, 50, 968, 40, 8f);
             cardS.Controls.Add(_lblHint);
 
             // ---------------- options ----------------
-            var cardO = NewCard("Options", 736, 78);
+            var cardO = NewCard("Options", 616, 496, 112);
 
             _chkApplyLaunch = NewCheck(cardO, "Apply saved settings at launch", 14, 26, 270);
             _chkReapply = NewCheck(cardO, "Re-apply after display or power changes", 14, 50, 270);
@@ -189,11 +295,11 @@ namespace ChromaPanel
             _chkStartup.Checked = AppSettings.GetStartWithWindows();
 
             // ---------------- bottom bar ----------------
-            _btnReset = NewButton(this, "Reset to neutral", 16, 828, 140);
-            _btnDiag = NewButton(this, "Diagnostics", 164, 828, 110);
+            _btnReset = NewButton(this, "Reset to neutral", 16, 736, 140);
+            _btnDiag = NewButton(this, "Diagnostics", 164, 736, 110);
 
             _lblSaved = new Label();
-            _lblSaved.SetBounds(282, 836, 200, 18);
+            _lblSaved.SetBounds(866, 744, 220, 18);
             _lblSaved.TextAlign = ContentAlignment.MiddleRight;
             _lblSaved.ForeColor = Theme.Faint;
             _lblSaved.Font = Theme.UI(8f);
@@ -201,7 +307,7 @@ namespace ChromaPanel
             _lblSaved.Text = "Changes save automatically";
             Controls.Add(_lblSaved);
 
-            _btnApply = NewButton(this, "Apply now", 494, 828, 110);
+            _btnApply = NewButton(this, "Apply now", 1094, 736, 110);
             _btnApply.Primary = true;
 
             // ---------------- tray ----------------
@@ -213,6 +319,11 @@ namespace ChromaPanel
             menu.Items.Add("Open ChromaPanel", null, delegate { ShowFromTray(); });
             menu.Items.Add("Apply default preset", null, delegate { ApplyDefaultPreset(); });
             menu.Items.Add("Reset all displays", null, delegate { ResetAll(); });
+            menu.Items.Add("Black out screens", null, delegate { ToggleBlackout(); });
+            _trayDesk = new ToolStripMenuItem("Sharpen the desktop");
+            _trayDesk.Checked = _s.DesktopSharpenEnabled;
+            _trayDesk.Click += delegate { _chkDesk.Checked = !_chkDesk.Checked; };
+            menu.Items.Add(_trayDesk);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Exit", null, delegate { _reallyClose = true; Close(); });
             _tray.ContextMenuStrip = menu;
@@ -227,6 +338,17 @@ namespace ChromaPanel
             _displayTimer.Interval = 1200;
             _displayTimer.Tick += delegate { _displayTimer.Stop(); OnDisplaysChanged(); };
 
+            // Driver-settings writes are a session + save each time, so do not
+            // fire one per pixel of slider drag.
+            _sharpTimer = new Timer();
+            _sharpTimer.Interval = 350;
+            _sharpTimer.Tick += delegate { _sharpTimer.Stop(); ApplySharpening(); };
+
+            _deskStatusTimer = new Timer();
+            _deskStatusTimer.Interval = 500;
+            _deskStatusTimer.Tick += delegate { UpdateDeskNote(); };
+            _deskStatusTimer.Start();
+
             _savedFlash = new Timer();
             _savedFlash.Interval = 1400;
             _savedFlash.Tick += delegate
@@ -237,11 +359,13 @@ namespace ChromaPanel
             };
         }
 
-        Card NewCard(string heading, int y, int h)
+        Card NewCard(string heading, int x, int y, int h) { return NewCard(heading, x, y, 588, h); }
+
+        Card NewCard(string heading, int x, int y, int w, int h)
         {
             var c = new Card();
             c.Heading = heading;
-            c.SetBounds(16, y, 588, h);
+            c.SetBounds(x, y, w, h);
             Controls.Add(c);
             return c;
         }
@@ -312,6 +436,7 @@ namespace ChromaPanel
             int on = 1;
             if (DwmSetWindowAttribute(Handle, 20, ref on, 4) != 0)
                 DwmSetWindowAttribute(Handle, 19, ref on, 4);
+            RegisterBlackoutHotkey(false);
         }
 
         protected override void OnShown(EventArgs e)
@@ -324,6 +449,7 @@ namespace ChromaPanel
         {
             // A second launch broadcasts this instead of opening a new window.
             if (m.Msg == Program.WM_SHOWME) ShowFromTray();
+            else if (m.Msg == Hotkey.WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_BLACKOUT) ToggleBlackout();
             base.WndProc(ref m);
         }
 
@@ -410,6 +536,72 @@ namespace ChromaPanel
             _btnApply.Click += delegate { ApplyCurrent(); SetStatus("Re-applied.", Theme.Ok); };
             _btnDiag.Click += delegate { using (var d = new DiagnosticsForm(_mons)) d.ShowDialog(this); };
 
+            // desktop sharpening
+            _chkDesk.CheckedChanged += delegate
+            {
+                _s.DesktopSharpenEnabled = _chkDesk.Checked;
+                if (_trayDesk != null) _trayDesk.Checked = _chkDesk.Checked;
+                UpdateDesktopSharpen();
+                QueueSave();
+            };
+            _cboDeskFilter.SelectedIndexChanged += delegate
+            {
+                if (_suspend) return;
+                _s.DesktopFilter = (SharpenFilter)Math.Max(0, _cboDeskFilter.SelectedIndex);
+                _desk.SetParams(_s.DesktopFilter, _s.DesktopSharpenStrength);
+                UpdateDeskNote();
+                QueueSave();
+            };
+            _cboDeskTarget.SelectedIndexChanged += delegate
+            {
+                if (_suspend) return;
+                int i = _cboDeskTarget.SelectedIndex;
+                _s.DesktopSharpenTarget = (i >= 0 && i < _deskTargetKeys.Count) ? _deskTargetKeys[i] : "";
+                UpdateDesktopSharpen();
+                QueueSave();
+            };
+            _rowDesk.Bar.ValueChanged += delegate
+            {
+                if (_suspend) return;
+                _rowDesk.UpdateReadout();
+                _s.DesktopSharpenStrength = _rowDesk.Bar.Value;
+                _desk.SetParams(_s.DesktopFilter, _s.DesktopSharpenStrength);   // live, no restart
+                QueueSave();
+            };
+
+            // sharpening
+            _chkNis.CheckedChanged += delegate { if (!_suspend) { UpdateSharpNote(); QueueSharpen(); } };
+            _rowSharp.Bar.ValueChanged += delegate
+            {
+                if (_suspend) return;
+                _rowSharp.UpdateReadout();
+                if (_chkNis.Checked) QueueSharpen();
+            };
+
+            // blackout
+            _btnBlackout.Click += delegate { ToggleBlackout(); };
+            // Recording a new shortcut must not fire the old one.
+            _hkBlack.GotFocus += delegate { Hotkey.Unregister(Handle, HOTKEY_BLACKOUT); };
+            _hkBlack.LostFocus += delegate { RegisterBlackoutHotkey(false); };
+            _hkBlack.HotkeyChanged += delegate
+            {
+                _s.BlackoutHotkey = _hkBlack.Value.ToString();
+                RegisterBlackoutHotkey(true);
+                QueueSave();
+            };
+            _cboBlackTarget.SelectedIndexChanged += delegate
+            {
+                if (_suspend) return;
+                int i = _cboBlackTarget.SelectedIndex;
+                _s.BlackoutTarget = (i >= 0 && i < _blackTargetKeys.Count) ? _blackTargetKeys[i] : "";
+                QueueSave();
+            };
+            _chkBlackCapture.CheckedChanged += delegate
+            {
+                _s.BlackoutHideFromCapture = _chkBlackCapture.Checked;
+                QueueSave();
+            };
+
             SystemEvents.DisplaySettingsChanged += OnSystemDisplayChange;
             SystemEvents.PowerModeChanged += OnPowerChange;
 
@@ -422,6 +614,9 @@ namespace ChromaPanel
                     return;
                 }
                 SaveNow();
+                if (_blackout != null) _blackout.Stop();
+                _desk.Stop();
+                try { Hotkey.Unregister(Handle, HOTKEY_BLACKOUT); } catch { }
                 try
                 {
                     SystemEvents.DisplaySettingsChanged -= OnSystemDisplayChange;
@@ -452,6 +647,7 @@ namespace ChromaPanel
             LoadDisplays(false);
             LoadSlidersFromState();
             SelectProfileForCurrentMonitor();
+            UpdateDesktopSharpen();   // displays moved, resized or changed HDR state
             if (_s.ReapplyOnDisplayChange) ApplyAll("Displays changed - settings re-applied.");
             else SetStatus("Display configuration changed.", Theme.Muted);
         }
@@ -529,6 +725,8 @@ namespace ChromaPanel
             _cboMon.SelectedIndex = Math.Min(idx, _cboMon.Items.Count - 1);
             _suspend = false;
 
+            RefreshBlackoutTargets();
+            RefreshDeskTargets();
             UpdateMonitorInfo();
         }
 
@@ -564,7 +762,7 @@ namespace ChromaPanel
             }
             if (_noHue.Contains(m.Key))
             {
-                SetHint("Hue is not exposed by this driver (NVAPI reports it unsupported), so that slider is disabled.");
+                SetHint("Hue could not be read for this display, so that slider is disabled. Diagnostics shows the NVAPI status.");
                 return;
             }
             SetHint("");
@@ -615,6 +813,168 @@ namespace ChromaPanel
             }
             _chkHdr.Invalidate();
             _suspend = wasSuspended;
+        }
+
+        // ==============================================================
+        // Sharpening (NVIDIA Image Scaling)
+        // ==============================================================
+        void LoadSharpening()
+        {
+            Sharpening.State st = Sharpening.Read();
+            bool usable = st.Available && Sharpening.WritesVerified;
+            _suspend = true;
+            _chkNis.Enabled = usable;
+            _chkNis.Checked = st.Enabled;
+            _rowSharp.Bar.SetQuiet(st.Percent);
+            _rowSharp.SetEnabled(usable);
+            _suspend = false;
+            _rowSharp.UpdateReadout();
+            UpdateSharpNote();
+            if (!st.Available) _lblSharpNote.Text = "Unavailable: " + st.Error;
+            else if (!Sharpening.WritesVerified) _lblSharpNote.Text = Sharpening.PendingNote;
+        }
+
+        void UpdateSharpNote()
+        {
+            _lblSharpNote.Text = _chkNis.Checked
+                ? "On for every game, on every display. Games below native resolution are upscaled with NIS; at native they are sharpened only. Restart a game to see a change. The Windows desktop is not affected."
+                : "Off (driver default). Turning it on is the same as NVIDIA Control Panel > Manage 3D settings > Image Scaling, and applies to games only.";
+        }
+
+        void QueueSharpen()
+        {
+            _sharpTimer.Stop();
+            _sharpTimer.Start();
+        }
+
+        void ApplySharpening()
+        {
+            string err;
+            bool on = _chkNis.Checked;
+            int pct = _rowSharp.Bar.Value;
+            if (!Sharpening.Write(on, pct, out err))
+            {
+                SetStatus("Could not change sharpening: " + err, Theme.Err);
+                LoadSharpening();   // show what the driver actually has
+                return;
+            }
+            SetStatus(on ? "Game sharpening " + pct + "% - restart a game to see it." : "Game sharpening off.", Theme.Ok);
+        }
+
+        // ==============================================================
+        // Desktop sharpening
+        // ==============================================================
+        void RefreshDeskTargets()
+        {
+            _suspend = true;
+            _cboDeskTarget.Items.Clear();
+            _deskTargetKeys.Clear();
+            _cboDeskTarget.Items.Add("All displays");
+            _deskTargetKeys.Add("");
+            int sel = 0;
+            foreach (MonitorInfo m in _mons)
+            {
+                _cboDeskTarget.Items.Add(m.ShortLabel);
+                _deskTargetKeys.Add(m.Key);
+                if (string.Equals(m.Key, _s.DesktopSharpenTarget, StringComparison.OrdinalIgnoreCase))
+                    sel = _deskTargetKeys.Count - 1;
+            }
+            _cboDeskTarget.SelectedIndex = sel;
+            _suspend = false;
+        }
+
+        /// <summary>Starts, restarts or stops the overlays to match the settings.</summary>
+        void UpdateDesktopSharpen()
+        {
+            if (!_s.DesktopSharpenEnabled) { _desk.Stop(); UpdateDeskNote(); return; }
+            List<MonitorInfo> targets = DesktopSharpen.TargetsFor(_mons, _s.DesktopSharpenTarget);
+            if (targets.Count == 0)
+            {
+                _desk.Stop();
+                _lblDeskNote.Text = "The chosen display is not connected.";
+                return;
+            }
+            _desk.Start(targets, _s.DesktopFilter, _s.DesktopSharpenStrength);
+            UpdateDeskNote();
+        }
+
+        /// <summary>What the selected filter is good at - shown under the picker.</summary>
+        static string FilterTip(SharpenFilter f)
+        {
+            switch (f)
+            {
+                case SharpenFilter.Rcas: return "FSR 1's sharpener: crisper than CAS, never overshoots its neighbours. Good for games.";
+                case SharpenFilter.Luma: return "Sharpens brightness only, so text gains no coloured fringes. The gentlest option.";
+                case SharpenFilter.Adaptive: return "Made for video that has already been resized, with anti-ringing. Best for TV and films.";
+                case SharpenFilter.Anime4K: return "Neural network that rebuilds line art. Superb on anime, but makes text look heavy.";
+                default: return "Adaptive: sharpens soft areas more than sharp ones. The safe all-rounder, kind to text.";
+            }
+        }
+
+        void UpdateDeskNote()
+        {
+            if (_lblDeskNote == null) return;
+            string second = _desk.Running
+                ? _desk.Describe()
+                : "Off. OBS records the plain desktop. Pauses for fullscreen apps. Windowed DRM video goes black.";
+            _lblDeskNote.Text = FilterTip(_s.DesktopFilter) + "\n" + second;
+        }
+
+        // ==============================================================
+        // Blackout
+        // ==============================================================
+        void RefreshBlackoutTargets()
+        {
+            _suspend = true;
+            _cboBlackTarget.Items.Clear();
+            _blackTargetKeys.Clear();
+            _cboBlackTarget.Items.Add("All displays");
+            _blackTargetKeys.Add("");
+            int sel = 0;
+            foreach (MonitorInfo m in _mons)
+            {
+                _cboBlackTarget.Items.Add(m.ShortLabel);
+                _blackTargetKeys.Add(m.Key);
+                if (string.Equals(m.Key, _s.BlackoutTarget, StringComparison.OrdinalIgnoreCase))
+                    sel = _blackTargetKeys.Count - 1;
+            }
+            _cboBlackTarget.SelectedIndex = sel;
+            _suspend = false;
+        }
+
+        /// <param name="report">Say so in the status line - only when the user just changed it.</param>
+        void RegisterBlackoutHotkey(bool report)
+        {
+            if (!IsHandleCreated) return;
+            Hotkey.Unregister(Handle, HOTKEY_BLACKOUT);
+            Hotkey hk = Hotkey.Parse(_s.BlackoutHotkey);
+            if (hk.IsEmpty)
+            {
+                if (report) SetStatus("Blackout shortcut cleared.", Theme.Muted);
+                return;
+            }
+            if (hk.Register(Handle, HOTKEY_BLACKOUT))
+            {
+                if (report) SetStatus("Blackout shortcut is now " + hk + ".", Theme.Ok);
+            }
+            else
+            {
+                SetStatus(hk + " is in use by another app - pick another.", Theme.Warn);
+            }
+        }
+
+        void ToggleBlackout()
+        {
+            if (_blackout == null)
+            {
+                _blackout = new Blackout(this);
+                _blackout.Ended += delegate { SetStatus("Blackout ended.", Theme.Muted); };
+            }
+            if (_blackout.Active) { _blackout.Stop(); return; }
+
+            List<Rectangle> areas = Blackout.AreasFor(_mons, _s.BlackoutTarget);
+            if (areas.Count == 0) { SetStatus("No display to black out.", Theme.Err); return; }
+            _blackout.Start(areas, _s.BlackoutHideFromCapture);
         }
 
         // ==============================================================

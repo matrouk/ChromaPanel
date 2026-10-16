@@ -743,7 +743,7 @@ namespace ChromaPanel
         static extern IntPtr QI64(uint id);
         [DllImport("nvapi.dll", EntryPoint = "nvapi_QueryInterface", CallingConvention = CallingConvention.Cdecl)]
         static extern IntPtr QI32(uint id);
-        static IntPtr Q(uint id) { return (IntPtr.Size == 8) ? QI64(id) : QI32(id); }
+        internal static IntPtr Q(uint id) { return (IntPtr.Size == 8) ? QI64(id) : QI32(id); }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         delegate int D_Init();
@@ -757,13 +757,27 @@ namespace ChromaPanel
         delegate int D_SetDvc(IntPtr h, uint outputId, ref NV_LEVEL info);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         delegate int D_SetHue(IntPtr h, uint outputId, int angle);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate int D_GetHue(IntPtr h, uint outputId, ref NV_HUE info);
 
-        // NV_DISPLAY_DVC_INFO_EX and NV_DISPLAY_HUE_INFO share this shape.
+        // NV_DISPLAY_DVC_INFO_EX: version + current/min/max/default.
         [StructLayout(LayoutKind.Sequential)]
         public struct NV_LEVEL
         {
             public uint version;
             public int currentLevel, minLevel, maxLevel, defaultLevel;
+        }
+
+        // NV_DISPLAY_HUE_INFO is NOT the same shape - it has no min/max, since
+        // hue is always 0..359. Passing the 20-byte DVC struct here returns
+        // -9 (NVAPI_INCOMPATIBLE_STRUCT_VERSION), which earlier builds misread
+        // as "hue unsupported" and disabled the slider for no reason.
+        // Probed on hardware: 12 bytes / version 1 returns 0.
+        [StructLayout(LayoutKind.Sequential)]
+        struct NV_HUE
+        {
+            public uint version;
+            public int currentAngle, defaultAngle;
         }
 
         const uint ID_Init = 0x0150E828;
@@ -775,6 +789,7 @@ namespace ChromaPanel
         const uint ID_SetHUE = 0xF5A0F22C;
 
         static readonly uint VER_LEVEL = (uint)(Marshal.SizeOf(typeof(NV_LEVEL)) | (1 << 16));
+        static readonly uint VER_HUE = (uint)(Marshal.SizeOf(typeof(NV_HUE)) | (1 << 16));
 
         static bool _init, _tried;
         public static string LastError = "";
@@ -844,7 +859,40 @@ namespace ChromaPanel
         }
 
         public static bool GetVibrance(string gdiName, out NV_LEVEL info) { return GetLevel(ID_GetDVCEx, gdiName, out info); }
-        public static bool GetHue(string gdiName, out NV_LEVEL info) { return GetLevel(ID_GetHUE, gdiName, out info); }
+        /// <summary>Hue, reported in the same NV_LEVEL shape as vibrance for the caller's convenience.</summary>
+        public static bool GetHue(string gdiName, out NV_LEVEL info)
+        {
+            info = new NV_LEVEL { minLevel = 0, maxLevel = 359 };
+            IntPtr h; uint oid;
+            if (!Resolve(gdiName, out h, out oid)) return false;
+            IntPtr p = Q(ID_GetHUE);
+            if (p == IntPtr.Zero) { LastError = "GetHUEInfo missing"; return false; }
+            var fn = (D_GetHue)Marshal.GetDelegateForFunctionPointer(p, typeof(D_GetHue));
+            var hue = new NV_HUE { version = VER_HUE };
+            int st = fn(h, oid, ref hue);
+            if (st != 0) { LastError = "GetHUEInfo status " + st + " (" + StatusName(st) + ")"; return false; }
+            info.currentLevel = hue.currentAngle;
+            info.defaultLevel = hue.defaultAngle;
+            return true;
+        }
+
+        /// <summary>The handful of NVAPI codes worth naming. -9 and -104 are easy to confuse.</summary>
+        public static string StatusName(int st)
+        {
+            switch (st)
+            {
+                case 0: return "OK";
+                case -1: return "ERROR";
+                case -3: return "NO_IMPLEMENTATION";
+                case -5: return "INVALID_ARGUMENT";
+                case -8: return "INVALID_HANDLE";
+                case -9: return "INCOMPATIBLE_STRUCT_VERSION";
+                case -104: return "NOT_SUPPORTED";
+                case -160: return "SETTING_NOT_FOUND";
+                case -163: return "PROFILE_NOT_FOUND";
+                default: return "status " + st;
+            }
+        }
 
         public static bool SetVibrance(string gdiName, int level)
         {

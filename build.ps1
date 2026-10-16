@@ -89,6 +89,8 @@ if ($Tools) {
         (Join-Path $srcDir 'Model.cs')
         (Join-Path $srcDir 'Native.cs')
         (Join-Path $srcDir 'Report.cs')
+        (Join-Path $srcDir 'Drs.cs')
+        (Join-Path $srcDir 'Sharpening.cs')
         (Join-Path $PSScriptRoot 'tools\DumpDisplays.cs')
     )
     $toolExe = Join-Path $OutDir 'DumpDisplays.exe'
@@ -105,15 +107,21 @@ if ($Tools) {
 }
 
 if ($Test) {
-    # Pure-logic tests: colour maths, JSON, settings. No Windows API calls,
-    # so these run anywhere, including on a CI runner with no display.
+    # Pure-logic tests: colour maths, JSON, settings, shortcut parsing,
+    # blackout targeting. None of them call into Windows display or NVIDIA
+    # APIs, so they run anywhere, including on a CI runner with no display.
     $testExe = Join-Path $OutDir 'Tests.exe'
     $testArgs = @(
         '/nologo', '/target:exe', '/platform:anycpu', '/langversion:5'
         "/out:$testExe"
         '/reference:System.dll'
+        '/reference:System.Drawing.dll'
+        '/reference:System.Windows.Forms.dll'
         (Join-Path $srcDir 'Json.cs')
         (Join-Path $srcDir 'Model.cs')
+        (Join-Path $srcDir 'Native.cs')
+        (Join-Path $srcDir 'Hotkey.cs')
+        (Join-Path $srcDir 'Blackout.cs')
         (Join-Path $PSScriptRoot 'tests\Tests.cs')
     )
     & $csc $testArgs
@@ -122,6 +130,29 @@ if ($Test) {
     Write-Host ''
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
+
+    # The sharpening shader, run through Direct3D and checked byte for byte
+    # against a CPU version of the same maths. Uses the GPU when there is
+    # one and Microsoft's WARP software rasteriser otherwise (CI has no GPU).
+    $gpuExe = Join-Path $OutDir 'GpuTests.exe'
+    $gpuArgs = @(
+        '/nologo', '/target:exe', '/platform:anycpu', '/langversion:5'
+        "/out:$gpuExe"
+        '/reference:System.dll'
+        (Join-Path $srcDir 'Json.cs')
+        (Join-Path $srcDir 'Model.cs')
+        (Join-Path $srcDir 'Dx.cs')
+        (Join-Path $srcDir 'Sharpen.cs')
+        (Join-Path $srcDir 'Anime4K.cs')
+        (Join-Path $PSScriptRoot 'tests\GpuTests.cs')
+    )
+    & $csc $gpuArgs
+    if ($LASTEXITCODE -ne 0) { throw "GPU test compilation failed with exit code $LASTEXITCODE" }
+
+    Write-Host ''
+    # The original GLSL is the reference the generated Anime4K shader is checked against.
+    & $gpuExe (Join-Path $PSScriptRoot 'third_party\anime4k\Anime4K_Restore_CNN_M.glsl')
+    if ($LASTEXITCODE -ne 0) { throw "GPU tests failed" }
 }
 
 if ($Run) {

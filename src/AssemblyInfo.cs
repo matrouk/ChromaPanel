@@ -2,10 +2,10 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 
 [assembly: AssemblyTitle("ChromaPanel")]
-[assembly: AssemblyDescription("Per-display colour control for Windows: brightness, contrast, gamma, digital vibrance and hue.")]
+[assembly: AssemblyDescription("Per-display colour control for Windows: brightness, contrast, gamma, digital vibrance, hue, desktop sharpening and OLED blackout.")]
 [assembly: AssemblyProduct("ChromaPanel")]
 [assembly: AssemblyCompany("ChromaPanel")]
 [assembly: AssemblyCopyright("MIT licensed")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 [assembly: ComVisible(false)]

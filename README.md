@@ -7,7 +7,7 @@ It replicates NVIDIA Control Panel's **Adjust desktop colour settings → Apply 
 enhancements** panel, but as a small standalone app with presets, a tray icon and a
 command line.
 
-- Single **~75 KB executable**. No installer, no .NET download, no dependencies.
+- Single **~350 KB executable**. No installer, no .NET download, no dependencies.
 - Correct **per-monitor** targeting, including two panels of the same model.
 - Settings **save themselves** — there is no Save button.
 
@@ -28,6 +28,8 @@ Settings live in `%APPDATA%\ChromaPanel\settings.json`.
 | **Preset** | Named looks. Switching display switches to that display's preset. A display you have never set one for falls back to the one marked `(default)`, which is also what the tray menu and `--apply` use. |
 | **Colour** | Brightness / contrast / gamma per channel (All, Red, Green, Blue), plus digital vibrance and hue. |
 | **Response** | Live plot of the three output curves. |
+| **Blackout** | A shortcut (default **Ctrl+Alt+B**) that turns chosen displays pure black. See below. |
+| **Sharpening** | *Desktop:* AMD CAS or FSR 1 RCAS over the whole screen, per display. *Games:* NVIDIA Image Scaling, currently locked while its driver settings are confirmed. |
 
 Changes apply as you drag, and are written to disk about a second after you stop.
 
@@ -39,10 +41,62 @@ ChromaPanel.exe --tray          start hidden in the notification area
 ChromaPanel.exe --apply         re-apply the saved per-display settings
 ChromaPanel.exe --apply NAME    apply preset NAME to every display
 ChromaPanel.exe --reset         return every display to neutral
+ChromaPanel.exe --blackout      black out the chosen display(s) until a key or click
 ```
 
 `--apply` is useful in a scheduled task or a shortcut, since Windows wipes the gamma
 ramp on resume and on some fullscreen exits.
+
+### Desktop sharpening
+
+Windows and the NVIDIA driver have no way to sharpen the desktop itself, so ChromaPanel does
+it the way ShaderGlass's *Desktop Glass* mode does: each display is captured with DXGI desktop
+duplication, run through a filter, and drawn into a click-through overlay. The desktop is
+already at native resolution, so these restore detail rather than upscale — upscaling only
+helps before an image has been stretched, which by the time it reaches the screen it has.
+
+| Filter | Best for | GPU time, 2560x1440 (RTX 5070 Ti) |
+|---|---|---|
+| **AMD CAS** | Everyday use and text. Adaptive: sharpens soft areas more than sharp ones. | 0.05 ms |
+| **AMD FSR 1 RCAS** | Games. Crisper than CAS, never overshoots its neighbours. | 0.03 ms |
+| **Luma sharpen** | Text. Sharpens brightness only, so it cannot add coloured fringes. Gentlest. | 0.03 ms |
+| **AdaptiveSharpen** | TV shows and films. Made for video that has already been resized, with anti-ringing. | 0.12 ms |
+| **Anime4K Restore** | Anime. A neural network that rebuilds line art. Makes ordinary text look heavy, so use it while watching. | 0.6 ms |
+
+At 0% the overlay switches off entirely. It only redraws when the screen changes, so an idle
+desktop costs nothing. Anime4K keeps seven half-float feature maps per display (about 200 MB
+of VRAM at 1440p) while it is selected.
+
+What comes with the technique (ShaderGlass and Magpie share these):
+
+- **About one frame of latency** on whatever is underneath. The mouse cursor is unaffected.
+- **It steps aside for fullscreen apps**, so games and fullscreen video are untouched.
+- **Windowed DRM video (Netflix, Disney+...) shows black** while it is on. Protected content is
+  blanked in every screen capture, and Windows reports any capture-excluded window, including
+  this overlay, as protected content, so it cannot be detected and avoided. Fullscreen playback
+  is fine because of the rule above; turn sharpening off from the tray for windowed streaming.
+- **OBS records the unsharpened desktop**, because the overlay is excluded from capture.
+- SDR and wide-gamut displays only; it switches itself off on a display with HDR on.
+
+Sharpening already-sharp text can make ClearType's coloured fringes more visible, especially on
+OLED sub-pixel layouts. Start low.
+
+### Blackout (for OLED)
+
+OBS keeps the display awake while it runs, so Windows' screen-off timer and screensaver
+never kick in, and a static image sits on an OLED for hours. The blackout shortcut covers
+the chosen display(s) with pure `#000000` — on an OLED those pixels are simply off.
+
+- **OBS keeps recording what's underneath.** The black window is excluded from screen
+  capture (`WDA_EXCLUDEFROMCAPTURE`), so Display Capture sees your real desktop, not a black
+  frame. Untick the option if you *want* the capture to go black too. If it still shows up
+  black in OBS, switch Display Capture's method to *Windows 10 (1903 and up)*.
+- **Nothing loses focus.** The window never activates, so a game or OBS keeps running.
+- **Coming back:** any key, click, scroll, or a deliberate mouse move (a bumped desk won't
+  do it). The waking key or click is swallowed, so it doesn't land in whatever is underneath.
+- Exclusive-fullscreen games draw over everything, including this. Borderless / windowed is fine.
+
+`--blackout` does the same from a Stream Deck button or an OBS hotkey script.
 
 ---
 
@@ -72,6 +126,12 @@ time, and it is the right thing to attach to a bug report about monitor naming.
 | `src/Ui.cs` | Dark theme, custom slider, cards, curve plot |
 | `src/Report.cs` | Diagnostics text, shared by the app and the console tool |
 | `src/Json.cs` | Small dependency-free JSON reader/writer |
+| `src/DesktopSharpen.cs`, `src/Overlay.cs` | Desktop duplication, the click-through overlay, per-display render threads |
+| `src/Sharpen.cs`, `src/Dx.cs` | The filter shaders and multi-pass renderer, and the raw Direct3D 11 / DXGI calls behind them |
+| `src/Anime4K.cs` | Generated by `tools/gen_anime4k.py` from `third_party/anime4k` — do not edit by hand |
+| `src/Blackout.cs`, `src/Hotkey.cs` | OLED blackout and the global shortcut |
+| `src/Drs.cs`, `src/Sharpening.cs` | NVIDIA driver settings (game sharpening) |
+| `tests/GpuTests.cs` | Runs every filter through Direct3D: CPU references for CAS, RCAS and Luma; a CPU Anime4K network parsed from the original GLSL; behaviour checks for AdaptiveSharpen; GPU-versus-WARP agreement for all |
 | `tests/Tests.cs` | Pure-logic tests: ramp maths, JSON, settings |
 | `legacy/` | The original PowerShell build this grew out of |
 
@@ -158,7 +218,9 @@ git push origin v1.0.0
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The desktop filters use AMD FidelityFX CAS and FSR 1 RCAS
+(MIT), bacondither's AdaptiveSharpen (BSD 2-clause) and bloc97's Anime4K (MIT); their notices
+are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Not affiliated with NVIDIA. NVAPI is used through its public entry point; the function
 IDs are the documented published values.

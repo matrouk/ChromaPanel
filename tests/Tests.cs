@@ -103,6 +103,29 @@ namespace ChromaPanel
             }
             Check(gbSame && rMoved, "a red-only brightness tint shows up in R alone");
 
+            // ---- blackout shortcut ----
+            Hotkey hk = Hotkey.Parse("Ctrl+Alt+B");
+            Check(hk.Key == System.Windows.Forms.Keys.B &&
+                  hk.Modifiers == (Hotkey.MOD_CONTROL | Hotkey.MOD_ALT), "Ctrl+Alt+B parses");
+            Check(hk.ToString() == "Ctrl+Alt+B", "Ctrl+Alt+B round-trips");
+            Check(Hotkey.Parse("ctrl + shift + f9").ToString() == "Ctrl+Shift+F9", "parsing ignores case and spaces");
+            Check(Hotkey.Parse("Ctrl+Alt+5").ToString() == "Ctrl+Alt+5", "digit keys round-trip");
+            Check(Hotkey.Parse("Ctrl+=").ToString() == "Ctrl+=", "punctuation round-trips");
+            Check(Hotkey.Parse("").IsEmpty && Hotkey.Parse("Ctrl+Nonsense").IsEmpty, "blank or bad text means no shortcut");
+            Check(Hotkey.Parse("Pause").IsUsable && Hotkey.Parse("F13").IsUsable, "lone Pause / F-keys are allowed");
+            Check(!Hotkey.Parse("B").IsUsable, "a lone letter is refused (too easy to hit while typing)");
+            Check(!Hotkey.Parse("Ctrl").IsUsable, "a lone modifier is refused");
+
+            // ---- blackout targeting ----
+            var d1 = new MonitorInfo { DevicePath = @"\\?\DISPLAY#AAA1111#1&2&3&UID1#{x}", Bounds = new System.Drawing.Rectangle(-2560, 0, 2560, 1440) };
+            var d2 = new MonitorInfo { DevicePath = @"\\?\DISPLAY#BBB2222#1&2&3&UID2#{x}", Bounds = new System.Drawing.Rectangle(0, 0, 2560, 1440) };
+            var mons = new List<MonitorInfo> { d1, d2 };
+            Check(Blackout.AreasFor(mons, "").Count == 2, "no target blacks out every display");
+            var only2 = Blackout.AreasFor(mons, d2.Key);
+            Check(only2.Count == 1 && only2[0].X == 0, "a target blacks out just that display");
+            Check(Blackout.AreasFor(mons, "DISPLAY#GONE#0").Count == 2,
+                  "a target that is no longer connected falls back to every display");
+
             // ---- JSON round trip ----
             var cs = new ColourSet();
             cs.R.Brightness = 61.5; cs.G.Contrast = 44; cs.B.Gamma = 1.35;

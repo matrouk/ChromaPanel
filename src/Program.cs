@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -53,6 +54,11 @@ namespace ChromaPanel
             if (opt.Apply || opt.Reset)
             {
                 RunHeadless(settings, opt);
+                return 0;
+            }
+            if (opt.Blackout)
+            {
+                RunBlackout(settings);
                 return 0;
             }
 
@@ -114,6 +120,21 @@ namespace ChromaPanel
             settings.Save();
         }
 
+        /// <summary>Stand-alone blackout for Stream Deck / OBS hotkeys; exits when woken.</summary>
+        static void RunBlackout(AppSettings settings)
+        {
+            List<Rectangle> areas = Blackout.AreasFor(Displays.Enumerate(), settings.BlackoutTarget);
+            if (areas.Count == 0) return;
+            using (var host = new Form())
+            {
+                IntPtr forceHandle = host.Handle;   // a UI-thread handle for the hooks to post back to
+                var b = new Blackout(host);
+                b.Ended += delegate { Application.ExitThread(); };
+                b.Start(areas, settings.BlackoutHideFromCapture);
+                Application.Run();
+            }
+        }
+
         static void Crash(Exception ex)
         {
             try
@@ -142,6 +163,7 @@ namespace ChromaPanel
             sb.AppendLine("ChromaPanel.exe --apply         apply the saved per-display settings");
             sb.AppendLine("ChromaPanel.exe --apply NAME    apply preset NAME to every display");
             sb.AppendLine("ChromaPanel.exe --reset         return every display to neutral");
+            sb.AppendLine("ChromaPanel.exe --blackout      black out the chosen display(s) until a key or click");
             sb.AppendLine("ChromaPanel.exe --help          this message");
             sb.AppendLine();
             sb.AppendLine("Settings: " + AppSettings.FilePath);
@@ -150,7 +172,7 @@ namespace ChromaPanel
 
         class Options
         {
-            public bool Tray, Apply, Reset, Help, UseSaved;
+            public bool Tray, Apply, Reset, Help, UseSaved, Blackout;
             public string ProfileName = "";
 
             public static Options Parse(string[] args)
@@ -176,6 +198,10 @@ namespace ChromaPanel
                             break;
                         case "reset":
                             o.Reset = true;
+                            break;
+                        case "blackout":
+                        case "black":
+                            o.Blackout = true;
                             break;
                         case "help":
                         case "h":
