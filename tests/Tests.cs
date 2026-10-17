@@ -166,6 +166,44 @@ namespace ChromaPanel
             Check(s.Find("night") != null, "profile lookup is case-insensitive");
             Check(s.Find("nope") == null, "unknown profile returns null");
 
+            // ---- a key this version does not know survives a save ----
+            var newer = AppSettings.Parse("{\"profiles\":[{\"name\":\"A\",\"set\":{}}],\"futureThing\":{\"x\":7},\"desktopSharpenStrength\":55}");
+            newer.DesktopSharpenStrength = 60;
+            var saved = Json.Read(newer.ToText());
+            Check(Json.Int(Json.Get(Json.Get(saved, "futureThing"), "x"), 0) == 7, "unknown keys are written back untouched");
+            Check(Json.Int(Json.Get(saved, "desktopSharpenStrength"), 0) == 60, "known keys still take the new value");
+            Check(Json.Get(Json.Read(new AppSettings().ToText()), "futureThing") == null, "a fresh settings object writes no stray keys");
+
+            // ---- sharpening over fullscreen apps ----
+            Check(new AppSettings().DesktopSharpenFullscreen, "fullscreen games are sharpened by default");
+            Check(AppSettings.Parse("{}").DesktopSharpenFullscreen, "a 1.1.0 settings file (no key) gets the default");
+            Check(!AppSettings.Parse("{\"desktopSharpenFullscreen\":false}").DesktopSharpenFullscreen, "turning it off is remembered");
+            Check(!FullscreenRule.PausesFor("Polaris-Win64-Shipping", "UnrealWindow"), "a game keeps its sharpening");
+            Check(!FullscreenRule.PausesFor("vlc", "Qt5QWindowIcon") && !FullscreenRule.PausesFor("mpv", "mpv"), "local video players keep it (no DRM)");
+            Check(FullscreenRule.PausesFor("chrome", "Chrome_WidgetWin_1") && FullscreenRule.PausesFor("MSEDGE", "x")
+                  && FullscreenRule.PausesFor("firefox", "MozillaWindowClass"), "browsers pause (DRM video would go black)");
+            Check(FullscreenRule.PausesFor("ApplicationFrameHost", "") && FullscreenRule.PausesFor("", "ApplicationFrameWindow"),
+                  "Store apps pause (Netflix, Disney+)");
+            Check(!FullscreenRule.PausesFor("", "") && !FullscreenRule.PausesFor(null, "UnrealWindow"), "an unreadable process is treated as a game");
+            Check(!FullscreenRule.PausesFor("chromapanel", "") && !FullscreenRule.PausesFor("ChromeDriverHelper", ""), "only whole names match");
+
+            // ---- startup entry ----
+            Check(AppSettings.RunTarget("\"C:\\A B\\ChromaPanel.exe\" --tray") == "C:\\A B\\ChromaPanel.exe", "quoted Run value: path without args");
+            Check(AppSettings.RunTarget("C:\\Tools\\ChromaPanel.exe --tray") == "C:\\Tools\\ChromaPanel.exe", "unquoted Run value: path without args");
+            Check(AppSettings.RunTarget("") == "" && AppSettings.RunTarget(null) == "", "no Run value, no target");
+            var v100 = new Version(1, 0, 0, 0);
+            var v110 = new Version(1, 1, 0, 0);
+            var v120 = new Version(1, 2, 0, 0);
+            string me = "C:\\New\\ChromaPanel.exe", stale = "C:\\Downloads\\ChromaPanel.exe";
+            Check(AppSettings.ShouldRepoint(stale, true, v100, me, v110), "an older copy in the startup entry is replaced");
+            Check(AppSettings.ShouldRepoint(stale, false, null, me, v110), "a deleted copy in the startup entry is replaced");
+            Check(!AppSettings.ShouldRepoint(stale, true, v120, me, v110), "a newer copy in the startup entry is kept");
+            Check(!AppSettings.ShouldRepoint(stale, true, v110, me, v110), "an equal copy elsewhere is kept");
+            Check(!AppSettings.ShouldRepoint("c:\\new\\chromapanel.exe", true, v100, me, v110), "the entry already naming this copy is left alone");
+            Check(!AppSettings.ShouldRepoint("C:\\Other\\tool.exe", true, null, me, v110), "a non-ChromaPanel target is left alone");
+            Check(AppSettings.CurrentVersion.Revision == 0 && AppSettings.CurrentVersion > v100,
+                  "this build's version has four parts, so 1.1.1 does not sort below 1.1.1.0");
+
             Console.WriteLine();
             Console.WriteLine(fails == 0 ? "ALL TESTS PASSED" : (fails + " TEST(S) FAILED"));
             Environment.Exit(fails == 0 ? 0 : 1);

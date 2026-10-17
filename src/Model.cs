@@ -214,7 +214,7 @@ namespace ChromaPanel
     /// <summary>Everything that gets persisted. Written automatically, never by a Save button.</summary>
     public class AppSettings
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.1.1";
 
         public List<Profile> Profiles = new List<Profile>();
         public string DefaultProfile = "";
@@ -236,6 +236,7 @@ namespace ChromaPanel
         public string DesktopSharpenFilter = "cas";  // cas | rcas | luma | adaptive | anime4k
         public int DesktopSharpenStrength = 40;      // 0..100
         public string DesktopSharpenTarget = "";     // "" = every display, else a monitor key
+        public bool DesktopSharpenFullscreen = true; // keep going over fullscreen games (browsers still pause)
 
         static readonly string[] FilterNames = { "cas", "rcas", "luma", "adaptive", "anime4k" };
 
@@ -262,6 +263,10 @@ namespace ChromaPanel
         public Dictionary<string, string> MonitorNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // Which preset each display is on, so switching displays switches preset too.
         public Dictionary<string, string> MonitorProfile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Everything read from the file, including keys this version does not know. Saving starts
+        // from it, so an older copy run for a moment does not erase a newer copy's settings.
+        Dictionary<string, object> _read;
 
         public static string Dir
         {
@@ -349,9 +354,17 @@ namespace ChromaPanel
             return null;
         }
 
+        internal static AppSettings Parse(string text)
+        {
+            var s = new AppSettings();
+            s.Read(text);
+            return s;
+        }
+
         void Read(string text)
         {
             object root = Json.Read(text);
+            _read = root as Dictionary<string, object>;
 
             var profs = Json.Get(root, "profiles") as List<object>;
             if (profs != null)
@@ -381,6 +394,7 @@ namespace ChromaPanel
             DesktopSharpenFilter = Json.Str(Json.Get(root, "desktopSharpenFilter"), "cas");
             DesktopSharpenStrength = Math.Max(0, Math.Min(100, Json.Int(Json.Get(root, "desktopSharpenStrength"), 40)));
             DesktopSharpenTarget = Json.Str(Json.Get(root, "desktopSharpenTarget"), "");
+            DesktopSharpenFullscreen = Json.Bool(Json.Get(root, "desktopSharpenFullscreen"), true);
 
             var mons = Json.Get(root, "monitors") as Dictionary<string, object>;
             if (mons != null)
@@ -415,55 +429,61 @@ namespace ChromaPanel
         {
             try
             {
-                var root = new Dictionary<string, object>();
-
-                var list = new List<object>();
-                foreach (Profile p in Profiles)
-                {
-                    var d = new Dictionary<string, object>();
-                    d["name"] = p.Name;
-                    d["set"] = p.Set.ToJson();
-                    list.Add(d);
-                }
-                root["profiles"] = list;
-                root["defaultProfile"] = DefaultProfile ?? "";
-                root["lastProfile"] = LastProfile ?? "";
-                root["lastMonitorKey"] = LastMonitorKey ?? "";
-                root["applyOnLaunch"] = ApplyOnLaunch;
-                root["reapplyOnDisplayChange"] = ReapplyOnDisplayChange;
-                root["minimiseToTray"] = MinimiseToTray;
-                root["startMinimised"] = StartMinimised;
-                root["linkAllMonitors"] = LinkAllMonitors;
-                root["blackoutHotkey"] = BlackoutHotkey ?? "";
-                root["blackoutTarget"] = BlackoutTarget ?? "";
-                root["blackoutHideFromCapture"] = BlackoutHideFromCapture;
-                root["desktopSharpenEnabled"] = DesktopSharpenEnabled;
-                root["desktopSharpenFilter"] = DesktopSharpenFilter ?? "cas";
-                root["desktopSharpenStrength"] = DesktopSharpenStrength;
-                root["desktopSharpenTarget"] = DesktopSharpenTarget ?? "";
-
-                var mons = new Dictionary<string, object>();
-                foreach (KeyValuePair<string, ColourSet> kv in Monitors) mons[kv.Key] = kv.Value.ToJson();
-                root["monitors"] = mons;
-
-                var names = new Dictionary<string, object>();
-                foreach (KeyValuePair<string, string> kv in MonitorNames) names[kv.Key] = kv.Value;
-                root["monitorNames"] = names;
-
-                var mp = new Dictionary<string, object>();
-                foreach (KeyValuePair<string, string> kv in MonitorProfile) mp[kv.Key] = kv.Value;
-                root["monitorProfile"] = mp;
-
+                string text = ToText();
                 Directory.CreateDirectory(Dir);
                 // Write to a temp file first so a crash mid-write cannot leave
                 // a truncated settings file behind.
                 string tmp = FilePath + ".tmp";
-                File.WriteAllText(tmp, Json.Write(root), new UTF8Encoding(false));
+                File.WriteAllText(tmp, text, new UTF8Encoding(false));
                 if (File.Exists(FilePath)) File.Delete(FilePath);
                 File.Move(tmp, FilePath);
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
+        }
+
+        internal string ToText()
+        {
+            var root = _read != null ? new Dictionary<string, object>(_read) : new Dictionary<string, object>();
+            var list = new List<object>();
+            foreach (Profile p in Profiles)
+            {
+                var d = new Dictionary<string, object>();
+                d["name"] = p.Name;
+                d["set"] = p.Set.ToJson();
+                list.Add(d);
+            }
+            root["profiles"] = list;
+            root["defaultProfile"] = DefaultProfile ?? "";
+            root["lastProfile"] = LastProfile ?? "";
+            root["lastMonitorKey"] = LastMonitorKey ?? "";
+            root["applyOnLaunch"] = ApplyOnLaunch;
+            root["reapplyOnDisplayChange"] = ReapplyOnDisplayChange;
+            root["minimiseToTray"] = MinimiseToTray;
+            root["startMinimised"] = StartMinimised;
+            root["linkAllMonitors"] = LinkAllMonitors;
+            root["blackoutHotkey"] = BlackoutHotkey ?? "";
+            root["blackoutTarget"] = BlackoutTarget ?? "";
+            root["blackoutHideFromCapture"] = BlackoutHideFromCapture;
+            root["desktopSharpenEnabled"] = DesktopSharpenEnabled;
+            root["desktopSharpenFilter"] = DesktopSharpenFilter ?? "cas";
+            root["desktopSharpenStrength"] = DesktopSharpenStrength;
+            root["desktopSharpenTarget"] = DesktopSharpenTarget ?? "";
+            root["desktopSharpenFullscreen"] = DesktopSharpenFullscreen;
+
+            var mons = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, ColourSet> kv in Monitors) mons[kv.Key] = kv.Value.ToJson();
+            root["monitors"] = mons;
+
+            var names = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, string> kv in MonitorNames) names[kv.Key] = kv.Value;
+            root["monitorNames"] = names;
+
+            var mp = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, string> kv in MonitorProfile) mp[kv.Key] = kv.Value;
+            root["monitorProfile"] = mp;
+
+            return Json.Write(root);
         }
 
         // ------------------------------------------------------------------
@@ -500,6 +520,90 @@ namespace ChromaPanel
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
+        }
+
+        /// <summary>
+        /// The startup entry records whichever copy ticked "Start with Windows", so an old download
+        /// keeps launching at sign-in after a newer one is in use. When the entry names a copy that
+        /// is gone or older than this one, point it here. A newer or equal copy is left alone, so
+        /// running an old build once cannot downgrade what starts with Windows.
+        /// Returns a sentence for the status line when it changed something, otherwise null.
+        /// </summary>
+        public static string HealStartupEntry()
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, true))
+                {
+                    if (k == null) return null;
+                    string target = RunTarget(k.GetValue(RunValue) as string);
+                    if (target.Length == 0) return null;
+                    string self = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                    bool exists = File.Exists(target);
+                    System.Version v = exists ? ExeVersion(target) : null;
+                    if (!ShouldRepoint(target, exists, v, self, CurrentVersion)) return null;
+
+                    k.SetValue(RunValue, "\"" + self + "\" --tray");
+                    return exists
+                        ? "Start with Windows now opens this copy instead of the older " + Short(v) + " in " + Path.GetDirectoryName(target) + "."
+                        : "Start with Windows pointed at a copy that no longer exists; it now opens this one.";
+                }
+            }
+            catch { return null; }
+        }
+
+        internal static bool ShouldRepoint(string target, bool exists, System.Version targetVersion, string self, System.Version selfVersion)
+        {
+            if (string.IsNullOrEmpty(target) || SamePath(target, self)) return false;
+            if (!exists) return true;
+            // Something that is not ChromaPanel at all (no version) is the user's business.
+            return targetVersion != null && targetVersion < selfVersion;
+        }
+
+        /// <summary>The program a Run value starts, without its arguments.</summary>
+        internal static string RunTarget(string command)
+        {
+            if (string.IsNullOrEmpty(command)) return "";
+            string c = command.Trim();
+            if (c.StartsWith("\"", StringComparison.Ordinal))
+            {
+                int close = c.IndexOf('"', 1);
+                return close > 0 ? c.Substring(1, close - 1) : c.Substring(1);
+            }
+            int exe = c.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            return exe > 0 ? c.Substring(0, exe + 4) : c;
+        }
+
+        static bool SamePath(string a, string b)
+        {
+            try { a = Path.GetFullPath(a); b = Path.GetFullPath(b); } catch { }
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>This build's version as four parts, so it compares correctly with file versions.</summary>
+        public static System.Version CurrentVersion { get { return Four(new System.Version(Version)); } }
+
+        /// <summary>The file version of a ChromaPanel executable, or null for anything else.</summary>
+        public static System.Version ExeVersion(string path)
+        {
+            try
+            {
+                var fvi = System.Diagnostics.FileVersionInfo.GetVersionInfo(path);
+                if (!string.Equals(fvi.ProductName, "ChromaPanel", StringComparison.Ordinal)) return null;
+                return new System.Version(fvi.FileMajorPart, fvi.FileMinorPart, fvi.FileBuildPart, fvi.FilePrivatePart);
+            }
+            catch { return null; }
+        }
+
+        // Version("1.1.1") has Revision -1, which sorts below 1.1.1.0.
+        static System.Version Four(System.Version v)
+        {
+            return new System.Version(v.Major, v.Minor, Math.Max(0, v.Build), Math.Max(0, v.Revision));
+        }
+
+        public static string Short(System.Version v)
+        {
+            return v == null ? "?" : v.Major + "." + v.Minor + "." + Math.Max(0, v.Build);
         }
 
         public static string Describe(double v)

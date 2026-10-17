@@ -20,6 +20,10 @@ Nothing else is needed: it uses the .NET Framework already built into Windows 10
 
 Settings live in `%APPDATA%\ChromaPanel\settings.json`.
 
+**Updating:** download the new `ChromaPanel.exe` and run it. If an older copy is still running in
+the tray, the new one closes it and takes over. If *Start with Windows* points at the older copy,
+it is moved over to the new one. Then you can delete the old file.
+
 ## Use
 
 | | |
@@ -29,7 +33,7 @@ Settings live in `%APPDATA%\ChromaPanel\settings.json`.
 | **Colour** | Brightness / contrast / gamma per channel (All, Red, Green, Blue), plus digital vibrance and hue. |
 | **Response** | Live plot of the three output curves. |
 | **Blackout** | A shortcut (default **Ctrl+Alt+B**) that turns chosen displays pure black. See below. |
-| **Sharpening** | *Desktop:* AMD CAS or FSR 1 RCAS over the whole screen, per display. *Games:* NVIDIA Image Scaling, currently locked while its driver settings are confirmed. |
+| **Sharpening** | *Desktop:* five filters over the whole screen, per display, fullscreen games included. *NIS:* NVIDIA Image Scaling through the driver, currently locked while its driver settings are confirmed. |
 
 Changes apply as you drag, and are written to disk about a second after you stop.
 
@@ -70,11 +74,20 @@ of VRAM at 1440p) while it is selected.
 What comes with the technique (ShaderGlass and Magpie share these):
 
 - **About one frame of latency** on whatever is underneath. The mouse cursor is unaffected.
-- **It steps aside for fullscreen apps**, so games and fullscreen video are untouched.
+- **Fullscreen games are sharpened too**, unless you untick *Sharpen fullscreen games too*.
+  Nothing is injected into the game; the overlay simply stays on top of it. Over a game the
+  overlay adds its frame of lag, and Windows has to compose the game instead of flipping it
+  straight to the screen, so G-Sync / FreeSync may not stay active. Untick it for competitive
+  play.
+- **Browsers and Store apps always get fullscreen to themselves** (Chrome, Edge, Firefox,
+  Netflix, Disney+...), so fullscreen streaming plays normally.
 - **Windowed DRM video (Netflix, Disney+...) shows black** while it is on. Protected content is
   blanked in every screen capture, and Windows reports any capture-excluded window, including
-  this overlay, as protected content, so it cannot be detected and avoided. Fullscreen playback
-  is fine because of the rule above; turn sharpening off from the tray for windowed streaming.
+  this overlay, as protected content, so it cannot be detected and avoided. Turn sharpening
+  off from the tray for windowed streaming.
+- Games in true exclusive fullscreen (older DirectX 9 to 11 titles with fullscreen
+  optimisations turned off) draw over everything and cannot be sharpened this way. Use
+  borderless.
 - **OBS records the unsharpened desktop**, because the overlay is excluded from capture.
 - SDR and wide-gamut displays only; it switches itself off on a display with HDR on.
 

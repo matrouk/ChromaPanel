@@ -41,6 +41,7 @@ namespace ChromaPanel
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int cmd);
         [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
         [DllImport("user32.dll")] static extern IntPtr DefWindowProc(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
         [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint key, byte alpha, uint flags);
         [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
         [DllImport("user32.dll")] static extern bool PeekMessage(out MSG msg, IntPtr hwnd, uint min, uint max, uint remove);
@@ -126,6 +127,17 @@ namespace ChromaPanel
             ShowWindow(Handle, SW_SHOWNOACTIVATE);
             SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             _visible = true;
+        }
+
+        /// <summary>
+        /// Back to the top of the topmost band if anything has got above it. A fullscreen game is
+        /// often topmost too, and Windows lifts it over the overlay whenever it is activated.
+        /// </summary>
+        public void KeepOnTop()
+        {
+            if (!_visible || Handle == IntPtr.Zero) return;
+            if (GetWindow(Handle, 3 /* GW_HWNDPREV */) == IntPtr.Zero) return;
+            SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
 
         public void Hide()

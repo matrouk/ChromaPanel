@@ -122,6 +122,7 @@ if ($Test) {
         (Join-Path $srcDir 'Native.cs')
         (Join-Path $srcDir 'Hotkey.cs')
         (Join-Path $srcDir 'Blackout.cs')
+        (Join-Path $srcDir 'FullscreenRule.cs')
         (Join-Path $PSScriptRoot 'tests\Tests.cs')
     )
     & $csc $testArgs

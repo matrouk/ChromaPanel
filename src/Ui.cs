@@ -383,7 +383,7 @@ namespace ChromaPanel
             TextRenderer.DrawText(e.Graphics, text, Font,
                 new Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 8, e.Bounds.Height),
                 sel ? Color.White : Theme.Text,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
     }
 
@@ -432,7 +432,7 @@ namespace ChromaPanel
             TextRenderer.DrawText(g, Text, Font,
                 new Rectangle(box.Right + 8, 0, Width - box.Right - 8, Height),
                 Enabled ? ForeColor : Theme.Faint,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
         protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }

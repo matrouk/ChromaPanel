@@ -64,19 +64,39 @@ namespace ChromaPanel
 
             // ---- single instance ------------------------------------
             bool isFirst;
-            using (var mutex = new Mutex(true, @"Local\ChromaPanel_SingleInstance", out isFirst))
+            using (var mutex = new Mutex(true, SingleInstance.MutexName, out isFirst))
             {
+                var notes = new List<string>();
                 if (!isFirst)
                 {
-                    // Ask the running copy to show itself, then step aside.
-                    PostMessage(HWND_BROADCAST, WM_SHOWME, IntPtr.Zero, IntPtr.Zero);
-                    return 0;
+                    System.Version replaced;
+                    if (!SingleInstance.ReplaceOlder(out replaced) || !Acquire(mutex))
+                    {
+                        // Ask the running copy to show itself, then step aside.
+                        PostMessage(HWND_BROADCAST, WM_SHOWME, IntPtr.Zero, IntPtr.Zero);
+                        return 0;
+                    }
+                    notes.Add("Closed an older ChromaPanel " + AppSettings.Short(replaced) + " that was running.");
+                    settings = AppSettings.Load();   // whatever the old copy saved last
                 }
 
+                string healed = AppSettings.HealStartupEntry();
+                if (healed != null) notes.Add(healed);
+
                 using (var form = new MainForm(settings, opt.Tray))
+                {
+                    if (notes.Count > 0) form.Notice(string.Join(" ", notes.ToArray()));
                     Application.Run(form);
+                }
             }
             return 0;
+        }
+
+        /// <summary>Waits for the replaced copy's mutex; a killed owner leaves it abandoned, which is ours.</summary>
+        static bool Acquire(Mutex m)
+        {
+            try { return m.WaitOne(5000); }
+            catch (AbandonedMutexException) { return true; }
         }
 
         static void RunHeadless(AppSettings settings, Options opt)

@@ -21,23 +21,27 @@ namespace ChromaPanel
     ///    ProtectedContentMaskedOut for ANY capture-excluded window, the
     ///    overlay itself included, so the flag is true on every frame
     ///    (measured: 25/25 with an excluded window, 0/25 without);
-    ///  - fullscreen apps get the display to themselves, so games and
-    ///    fullscreen video are untouched.
+    ///  - over a fullscreen game the overlay costs that frame too, and the
+    ///    game is composed by Windows instead of flipped straight to the
+    ///    screen. It is optional (OverFullscreen); browsers and Store apps
+    ///    always get the display to themselves, because DRM video in them
+    ///    would turn black (see FullscreenRule).
     /// </summary>
     internal sealed class DesktopSharpen : IDisposable
     {
         readonly List<Worker> _workers = new List<Worker>();
         volatile int _filter;
         volatile int _strengthMilli;
+        volatile bool _overFullscreen = true;
 
         public bool Running { get { return _workers.Count > 0; } }
         internal SharpenFilter Filter { get { return (SharpenFilter)_filter; } }
         internal float Strength { get { return _strengthMilli / 1000f; } }
 
-        public void Start(List<MonitorInfo> targets, SharpenFilter filter, int percent)
+        public void Start(List<MonitorInfo> targets, SharpenFilter filter, int percent, bool overFullscreen)
         {
             Stop();
-            SetParams(filter, percent);
+            SetParams(filter, percent, overFullscreen);
             foreach (MonitorInfo m in targets)
             {
                 var w = new Worker(this, m.GdiName, m.BaseName, m.HdrEnabled);
@@ -47,10 +51,11 @@ namespace ChromaPanel
         }
 
         /// <summary>Live change; the render threads pick it up on their next frame.</summary>
-        public void SetParams(SharpenFilter filter, int percent)
+        public void SetParams(SharpenFilter filter, int percent, bool overFullscreen)
         {
             _filter = (int)filter;
             _strengthMilli = Math.Max(0, Math.Min(100, percent)) * 10;
+            _overFullscreen = overFullscreen;
             foreach (Worker w in _workers) w.ParamsChanged = true;
         }
 
@@ -75,7 +80,7 @@ namespace ChromaPanel
             var sb = new StringBuilder();
             foreach (Worker w in _workers)
             {
-                if (sb.Length > 0) sb.Append("   \u00B7   ");
+                if (sb.Length > 0) sb.Append("  \u00B7  ");
                 sb.Append(w.Label).Append(": ").Append(w.State);
             }
             return sb.ToString();
@@ -136,6 +141,14 @@ namespace ChromaPanel
                         s = new Session(this, _gdi);
                         s.Loop();
                     }
+                    catch (DxException ex)
+                    {
+                        // E_ACCESSDENIED: Windows will not share the screen right now - a UAC
+                        // prompt, the lock screen, or a game in true exclusive fullscreen.
+                        State = ex.HResult32 == unchecked((int)0x80070005)
+                            ? "paused (exclusive fullscreen or a secure screen)"
+                            : "error - " + ex.Message;
+                    }
                     catch (Exception ex) { State = "error - " + ex.Message; }
                     finally { if (s != null) s.Dispose(); }
 
@@ -147,6 +160,7 @@ namespace ChromaPanel
 
             internal SharpenFilter Filter { get { return _owner.Filter; } }
             internal float Strength { get { return _owner.Strength; } }
+            internal bool OverFullscreen { get { return _owner._overFullscreen; } }
         }
 
         // ==================================================================
@@ -160,6 +174,8 @@ namespace ChromaPanel
             OverlayWindow _overlay;
             Rectangle _bounds;
             int _width, _height;
+            IntPtr _lastApp = IntPtr.Zero;
+            AppKind _lastKind;
 
             public Session(Worker w, string gdi)
             {
@@ -239,19 +255,29 @@ namespace ChromaPanel
                     {
                         lastCheck = now;
                         string why = null;
+                        IntPtr app = IntPtr.Zero;
                         if (_w.Strength <= 0f) why = "strength 0";
-                        else if (FullscreenAppOn(_bounds)) why = "fullscreen app";
+                        else
+                        {
+                            app = FullscreenWindowOn(_bounds);
+                            if (app != IntPtr.Zero) why = PauseReason(KindOf(app), _w.OverFullscreen);
+                        }
 
                         if (why != null)
                         {
                             if (!paused) { _overlay.Hide(); paused = true; }
                             _w.State = "paused (" + why + ")";
                         }
-                        else if (paused && haveFrame)
+                        else
                         {
-                            paused = false;
-                            needRender = true;
-                            _w.State = "sharpening";
+                            if (paused && haveFrame) { paused = false; needRender = true; }
+                            if (!paused)
+                            {
+                                _w.State = app != IntPtr.Zero ? "sharpening (fullscreen)" : "sharpening";
+                                // Games are often topmost themselves and rise above the
+                                // overlay each time they are activated.
+                                if (app != IntPtr.Zero) _overlay.KeepOnTop();
+                            }
                         }
                     }
 
@@ -273,6 +299,13 @@ namespace ChromaPanel
                     }
                 }
                 _overlay.Hide();
+            }
+
+            /// <summary>Classified once per window; a game keeps the same handle while it runs.</summary>
+            AppKind KindOf(IntPtr app)
+            {
+                if (app != _lastApp) { _lastApp = app; _lastKind = Classify(app); }
+                return _lastKind;
             }
 
             public void Dispose()
@@ -300,11 +333,52 @@ namespace ChromaPanel
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
         [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
+        [DllImport("user32.dll")] static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+        [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr p, int flags, StringBuilder name, ref int size);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
 
         const uint GA_ROOT = 2;
+        const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        enum AppKind { Game, DrmHost, ChromaPanel }
+
+        /// <summary>Why sharpening steps aside for this fullscreen window, or null to keep going.</summary>
+        static string PauseReason(AppKind kind, bool overFullscreen)
+        {
+            if (kind == AppKind.ChromaPanel) return "blackout";          // never cover our own black screen
+            if (!overFullscreen) return "fullscreen app";
+            if (kind == AppKind.DrmHost) return "browser or Store app";
+            return null;
+        }
+
+        static AppKind Classify(IntPtr h)
+        {
+            var cls = new StringBuilder(256);
+            GetClassName(h, cls, cls.Capacity);
+            string path = ImagePath(h);
+            if (path.Length > 0 && AppSettings.ExeVersion(path) != null) return AppKind.ChromaPanel;
+            string name = path.Length > 0 ? System.IO.Path.GetFileNameWithoutExtension(path) : "";
+            return FullscreenRule.PausesFor(name, cls.ToString()) ? AppKind.DrmHost : AppKind.Game;
+        }
+
+        static string ImagePath(IntPtr h)
+        {
+            int pid;
+            GetWindowThreadProcessId(h, out pid);
+            IntPtr p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (p == IntPtr.Zero) return "";
+            try
+            {
+                var sb = new StringBuilder(1024);
+                int size = sb.Capacity;
+                return QueryFullProcessImageName(p, 0, sb, ref size) ? sb.ToString() : "";
+            }
+            finally { CloseHandle(p); }
+        }
 
         /// <summary>
-        /// Is a fullscreen app showing on this display? Looks at whatever is on
+        /// The fullscreen app showing on this display, if any. Looks at whatever is on
         /// top at the display's centre - not just the focused window - so a
         /// fullscreen video on a second monitor counts too. (The overlay is
         /// click-through, so WindowFromPoint looks straight through it.)
@@ -315,22 +389,23 @@ namespace ChromaPanel
         /// one covers the whole screen. Games, F11 browsers and video players
         /// are not in the maximised state - Chromium even un-maximises first.
         /// </summary>
-        static bool FullscreenAppOn(Rectangle display)
+        static IntPtr FullscreenWindowOn(Rectangle display)
         {
             var centre = new POINT { X = display.Left + display.Width / 2, Y = display.Top + display.Height / 2 };
             IntPtr h = GetAncestor(WindowFromPoint(centre), GA_ROOT);
-            if (h == IntPtr.Zero) return false;
+            if (h == IntPtr.Zero) return IntPtr.Zero;
 
             var cls = new StringBuilder(64);
             GetClassName(h, cls, cls.Capacity);
             string c = cls.ToString();
-            if (c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" || c == "Shell_SecondaryTrayWnd") return false;
+            if (c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" || c == "Shell_SecondaryTrayWnd") return IntPtr.Zero;
 
-            if (IsZoomed(h)) return false;
+            if (IsZoomed(h)) return IntPtr.Zero;
 
             RECT r;
-            if (!GetWindowRect(h, out r)) return false;
-            return r.Left <= display.Left && r.Top <= display.Top && r.Right >= display.Right && r.Bottom >= display.Bottom;
+            if (!GetWindowRect(h, out r)) return IntPtr.Zero;
+            bool covers = r.Left <= display.Left && r.Top <= display.Top && r.Right >= display.Right && r.Bottom >= display.Bottom;
+            return covers ? h : IntPtr.Zero;
         }
     }
 }
